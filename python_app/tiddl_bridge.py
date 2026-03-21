@@ -18,6 +18,20 @@ import traceback
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("tiddl_bridge")
 
+# Diagnostic: log sys.path and verify critical imports at load time
+logger.info(f"Python {sys.version}")
+logger.info(f"sys.path = {sys.path}")
+
+# Test critical imports eagerly so we catch issues at startup
+_import_errors = []
+for _mod in ["tiddl", "tiddl.auth", "tiddl.api", "tiddl.utils", "tiddl.models", "requests", "pydantic"]:
+    try:
+        __import__(_mod)
+        logger.info(f"  ✓ import {_mod}")
+    except Exception as _e:
+        logger.error(f"  ✗ import {_mod}: {_e}")
+        _import_errors.append((_mod, str(_e)))
+
 # iOS Documents directory for persistent storage
 DOCUMENTS_DIR = None
 

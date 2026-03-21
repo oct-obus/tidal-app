@@ -76,6 +76,19 @@ jobs:
           find . \( -name "tests" -o -name "test" \) -type d -exec rm -rf {} + 2>/dev/null || true
           rm -rf pydantic pydantic_core ffmpeg_asyncio
 
+      - name: Verify tiddl package integrity
+        run: |
+          echo "=== Verify tiddl package ==="
+          for f in tiddl/__init__.py tiddl/auth.py tiddl/api.py tiddl/config.py tiddl/download.py tiddl/utils.py tiddl/models/__init__.py tiddl/models/auth.py; do
+            if [ -f "python_packages_built/$f" ]; then echo "  ✓ $f"
+            else echo "  ✗ $f MISSING!"; exit 1; fi
+          done
+          echo "=== Verify other critical packages ==="
+          for pkg in requests urllib3 idna certifi mutagen aiohttp m3u8; do
+            if [ -d "python_packages_built/$pkg" ]; then echo "  ✓ $pkg/"
+            else echo "  ⚠ $pkg/ not found (may be single-file)"; fi
+          done
+
       - name: Build for simulator
         run: flutter build ios --simulator --debug
 
@@ -116,7 +129,7 @@ jobs:
             2>&1 | tee /tmp/sim_logs.txt
 
           echo "=== Log output (filtered) ==="
-          grep -i "python\|bridge\|tiddl\|error\|fatal\|crash" /tmp/sim_logs.txt || echo "(no matching lines)"
+          grep -i "python\|bridge\|tiddl\|error\|fatal\|crash\|import" /tmp/sim_logs.txt || echo "(no matching lines)"
 
           # Cleanup
           xcrun simctl shutdown "$DEVICE_ID" 2>/dev/null || true
@@ -125,19 +138,24 @@ jobs:
           # Verify Python initialized
           if grep -q "Python initialized successfully" /tmp/sim_logs.txt; then
             echo "✅ PASS: Python initialized in simulator"
-            exit 0
           elif grep -q "Failed to initialize Python" /tmp/sim_logs.txt; then
             echo "❌ FAIL: Python failed to initialize"
             exit 1
           elif grep -q "PythonBridge" /tmp/sim_logs.txt; then
             echo "⚠️ Plugin code ran but Python init status unclear — passing"
-            exit 0
           else
             echo "⚠️ No PythonBridge log lines found — app may not have launched fully"
             echo "Full log line count: $(wc -l < /tmp/sim_logs.txt)"
-            # Don't fail — the app compiled and installed successfully
-            # Runtime issues will be caught in on-device testing
-            exit 0
+          fi
+
+          # Verify tiddl imports succeeded (logged by tiddl_bridge.py at startup)
+          if grep -q "import tiddl.auth" /tmp/sim_logs.txt; then
+            echo "✅ tiddl.auth importable"
+          fi
+          if grep "import" /tmp/sim_logs.txt | grep -q "✗"; then
+            echo "❌ FAIL: Some imports failed!"
+            grep "✗" /tmp/sim_logs.txt
+            exit 1
           fi
 
   # --- Device build: produce unsigned IPA ---
@@ -211,6 +229,13 @@ jobs:
           cd ..
           echo "Cleaned packages size: $(du -sh python_packages_built | cut -f1)"
 
+      - name: Verify tiddl package integrity
+        run: |
+          for f in tiddl/__init__.py tiddl/auth.py tiddl/api.py tiddl/config.py tiddl/download.py tiddl/utils.py tiddl/models/__init__.py tiddl/models/auth.py; do
+            if [ -f "python_packages_built/$f" ]; then echo "  ✓ $f"
+            else echo "  ✗ $f MISSING!"; exit 1; fi
+          done
+
       - name: Build iOS (no codesign)
         run: flutter build ios --release --no-codesign
 
@@ -232,15 +257,15 @@ jobs:
         working-directory: build/ios/iphoneos
         run: |
           echo "=== Verify Python bundle ==="
-          ls -la Payload/Runner.app/python/ || echo "WARN: No python dir!"
-          echo "--- stdlib ---"
-          ls Payload/Runner.app/python/lib/ 2>/dev/null | head -5
+          ls -la Payload/Runner.app/python/ || { echo "FATAL: No python dir!"; exit 1; }
+          echo "--- tiddl package ---"
+          ls Payload/Runner.app/python/app_packages/tiddl/ || { echo "FATAL: tiddl missing from bundle!"; exit 1; }
           echo "--- app code ---"
-          ls Payload/Runner.app/python/app/ 2>/dev/null
-          echo "--- app packages ---"
-          ls Payload/Runner.app/python/app_packages/ 2>/dev/null | head -20
-          echo "--- frameworks (sample) ---"
-          ls Payload/Runner.app/Frameworks/ 2>/dev/null | head -10
+          ls Payload/Runner.app/python/app/
+          echo "--- app packages (all) ---"
+          ls Payload/Runner.app/python/app_packages/
+          echo "--- frameworks count ---"
+          ls Payload/Runner.app/Frameworks/ | wc -l
           echo "--- IPA size ---"
           du -sh TidalApp.ipa
 
