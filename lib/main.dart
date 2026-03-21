@@ -8,6 +8,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
   await JustAudioBackground.init(
     androidNotificationChannelId: 'com.obus.tidal_app.audio',
     androidNotificationChannelName: 'Audio playback',
@@ -60,6 +61,8 @@ class _HomePageState extends State<HomePage> {
   String? _pythonVersion;
   String _downloadStep = '';
   double _playbackSpeed = 1.0;
+  double _downloadProgress = 0;
+  Timer? _progressTimer;
 
   // Auth flow state
   String? _authUserCode;
@@ -97,6 +100,7 @@ class _HomePageState extends State<HomePage> {
     _urlController.dispose();
     _player.dispose();
     _authPollTimer?.cancel();
+    _progressTimer?.cancel();
     super.dispose();
   }
 
@@ -262,34 +266,48 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  void _startProgressPolling() {
+    _progressTimer?.cancel();
+    _progressTimer = Timer.periodic(const Duration(milliseconds: 500), (_) async {
+      try {
+        final response = await _channel.invokeMethod<String>('downloadProgress');
+        if (response == null) return;
+        final data = jsonDecode(response);
+        if (data['success'] == true) {
+          final p = data['data'];
+          final step = p['step'] as String? ?? 'idle';
+          final pct = (p['pct'] as num?)?.toDouble() ?? 0;
+          final detail = p['detail'] as String? ?? '';
+          if (step != 'idle') {
+            setState(() {
+              _downloadProgress = pct / 100.0;
+              _downloadStep = detail.isNotEmpty ? detail : step;
+            });
+          }
+        }
+      } catch (_) {}
+    });
+  }
+
+  void _stopProgressPolling() {
+    _progressTimer?.cancel();
+    _progressTimer = null;
+  }
+
   Future<void> _download() async {
     final url = _urlController.text.trim();
     if (url.isEmpty) return;
 
     setState(() {
       _isDownloading = true;
-      _downloadStep = 'Looking up track...';
-      _status = 'Looking up track...';
+      _downloadStep = 'Starting...';
+      _downloadProgress = 0;
+      _status = 'Starting download...';
     });
 
-    try {
-      // Step 1: Get track info
-      final infoResponse = await _channel.invokeMethod<String>(
-        'getTrackInfo',
-        {'url': url},
-      );
-      if (infoResponse != null) {
-        final infoData = jsonDecode(infoResponse);
-        if (infoData['success'] == true) {
-          final info = infoData['data'];
-          setState(() {
-            _downloadStep = 'Downloading: ${info['title']}...';
-            _status = 'Downloading: ${info['title']}...';
-          });
-        }
-      }
+    _startProgressPolling();
 
-      // Step 2: Download
+    try {
       final response = await _channel.invokeMethod<String>('download', {'url': url});
       if (response == null) {
         setState(() => _status = 'Download failed: no response');
@@ -301,6 +319,7 @@ class _HomePageState extends State<HomePage> {
         final dl = data['data'];
         setState(() {
           _downloadStep = '';
+          _downloadProgress = 1.0;
           _status = 'Downloaded: ${dl['title']}';
           _downloadedPath = dl['filePath'];
           _trackTitle = dl['title'];
@@ -315,6 +334,7 @@ class _HomePageState extends State<HomePage> {
     } on MissingPluginException {
       setState(() => _status = 'Python bridge not available');
     } finally {
+      _stopProgressPolling();
       setState(() {
         _isDownloading = false;
         _downloadStep = '';
@@ -479,10 +499,18 @@ class _HomePageState extends State<HomePage> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.download),
-              label: Text(_isDownloading
-                  ? (_downloadStep.isNotEmpty ? _downloadStep : 'Downloading...')
-                  : 'Download'),
+              label: Text(_isDownloading ? 'Downloading...' : 'Download'),
             ),
+            if (_isDownloading) ...[
+              const SizedBox(height: 8),
+              LinearProgressIndicator(value: _downloadProgress > 0 ? _downloadProgress : null),
+              const SizedBox(height: 4),
+              Text(
+                _downloadStep,
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                textAlign: TextAlign.center,
+              ),
+            ],
             const SizedBox(height: 24),
             // Status / Player card
             Card(

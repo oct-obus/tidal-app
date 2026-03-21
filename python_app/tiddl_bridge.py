@@ -225,12 +225,40 @@ def get_track_info(url_or_id):
         return _result(False, error=str(e))
 
 
+def _write_progress(step, pct=0, detail=""):
+    """Write download progress to a file for Dart to poll."""
+    try:
+        if not DOCUMENTS_DIR:
+            return
+        progress_path = os.path.join(DOCUMENTS_DIR, ".download_progress.json")
+        with open(progress_path, "w") as f:
+            json.dump({"step": step, "pct": pct, "detail": detail}, f)
+    except Exception:
+        pass
+
+
+def get_download_progress():
+    """Read current download progress."""
+    try:
+        if not DOCUMENTS_DIR:
+            return _result(True, {"step": "idle", "pct": 0, "detail": ""})
+        progress_path = os.path.join(DOCUMENTS_DIR, ".download_progress.json")
+        if not os.path.exists(progress_path):
+            return _result(True, {"step": "idle", "pct": 0, "detail": ""})
+        with open(progress_path) as f:
+            data = json.load(f)
+        return _result(True, data)
+    except Exception as e:
+        return _result(False, error=str(e))
+
+
 def download_track(url_or_id, quality="LOSSLESS"):
     """Download a track from Tidal."""
     try:
         from tiddl.cli.utils.resource import TidalResource
-        from tiddl.core.utils.download import get_track_stream_data
         from tiddl.core.metadata import add_track_metadata, Cover
+
+        _write_progress("lookup", 0, "Looking up track...")
 
         api = _get_tidal_api()
         resource = TidalResource.from_string(url_or_id)
@@ -238,13 +266,36 @@ def download_track(url_or_id, quality="LOSSLESS"):
             return _result(False, error=f"Only track URLs supported, got: {resource.type}")
 
         track = api.get_track(resource.id)
+        artist_name = track.artist.name if track.artist else "Unknown"
+        _write_progress("stream", 5, f"{artist_name} — {track.title}")
+
         stream = api.get_track_stream(resource.id, quality)
-        stream_data, file_ext = get_track_stream_data(stream)
+
+        # Use parse_track_stream for segment-level progress
+        try:
+            from tiddl.core.utils.parse import parse_track_stream
+            from requests import Session as ReqSession
+
+            urls, file_ext = parse_track_stream(stream)
+            _write_progress("downloading", 10, f"Downloading ({len(urls)} segments)...")
+
+            stream_data = b""
+            with ReqSession() as s:
+                for i, url in enumerate(urls):
+                    stream_data += s.get(url).content
+                    pct = 10 + int(80 * (i + 1) / len(urls))
+                    _write_progress("downloading", pct, f"Segment {i+1}/{len(urls)}")
+        except ImportError:
+            # Fallback: use get_track_stream_data if parse not available
+            from tiddl.core.utils.download import get_track_stream_data
+            _write_progress("downloading", 10, "Downloading...")
+            stream_data, file_ext = get_track_stream_data(stream)
+
+        _write_progress("metadata", 92, "Adding metadata...")
 
         download_dir = os.path.join(DOCUMENTS_DIR, "downloads")
         os.makedirs(download_dir, exist_ok=True)
 
-        artist_name = track.artist.name if track.artist else "Unknown"
         safe_name = "".join(c for c in f"{artist_name} - {track.title}" if c.isalnum() or c in " -_.")
         file_path = os.path.join(download_dir, f"{safe_name}{file_ext}")
 
@@ -265,6 +316,8 @@ def download_track(url_or_id, quality="LOSSLESS"):
         except Exception as e:
             logger.warning(f"Metadata error (non-fatal): {e}")
 
+        _write_progress("done", 100, track.title)
+
         return _result(True, {
             "filePath": file_path,
             "title": track.title,
@@ -274,6 +327,7 @@ def download_track(url_or_id, quality="LOSSLESS"):
             "fileExtension": file_ext,
         })
     except Exception as e:
+        _write_progress("error", 0, str(e))
         logger.error(f"Download error: {e}\n{traceback.format_exc()}")
         return _result(False, error=str(e))
 

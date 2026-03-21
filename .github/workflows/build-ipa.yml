@@ -26,8 +26,9 @@ jobs:
 
       - name: Configure iOS capabilities
         run: |
-          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" ios/Runner/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" ios/Runner/Info.plist 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" ios/Runner/Info.plist 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Set :UIBackgroundModes:0 audio" ios/Runner/Info.plist
 
       - run: flutter pub get
 
@@ -186,8 +187,9 @@ jobs:
 
       - name: Configure iOS capabilities
         run: |
-          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" ios/Runner/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" ios/Runner/Info.plist 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" ios/Runner/Info.plist 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Set :UIBackgroundModes:0 audio" ios/Runner/Info.plist
 
       - run: flutter pub get
 

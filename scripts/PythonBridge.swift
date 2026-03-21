@@ -195,6 +195,11 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(response)
             }
 
+        case "downloadProgress":
+            bridge.runWithResult("tiddl_bridge.get_download_progress()") { response in
+                result(response)
+            }
+
         case "refreshAuth":
             bridge.runWithResult("tiddl_bridge.refresh_auth()") { response in
                 result(response)
