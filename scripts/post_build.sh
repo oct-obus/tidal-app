@@ -36,6 +36,10 @@ fi
 
 # Determine Python version
 PYTHON_VER=$(ls -1 "$STDLIB_DEST" | head -1)
+if [ -z "$PYTHON_VER" ]; then
+    echo "ERROR: Could not determine Python version in $STDLIB_DEST"
+    exit 1
+fi
 echo "  Python version: $PYTHON_VER"
 
 # 2. Convert .so → .framework bundles
@@ -105,7 +109,7 @@ PLIST
 
 # Process stdlib C extensions
 SO_COUNT=0
-find "$STDLIB_DEST/$PYTHON_VER/lib-dynload" -name "*.so" 2>/dev/null | while read SO_FILE; do
+find "$STDLIB_DEST/$PYTHON_VER/lib-dynload" -name "*.so" 2>/dev/null | while IFS= read -r SO_FILE; do
     convert_so_to_framework "$SO_FILE" "python/lib/$PYTHON_VER/lib-dynload"
 done
 

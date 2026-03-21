@@ -81,6 +81,14 @@ class PythonBridge: NSObject {
         return result == 0
     }
 
+    /// Escape a string for safe inclusion in Python string literals
+    private func pythonEscape(_ s: String) -> String {
+        return s.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "'", with: "\\'")
+                .replacingOccurrences(of: "\n", with: "\\n")
+                .replacingOccurrences(of: "\r", with: "\\r")
+    }
+
     /// Run Python code that stores its result in `_bridge_result` and return it
     func runWithResult(_ code: String, completion: @escaping (String?) -> Void) {
         queue.async { [weak self] in
@@ -88,6 +96,9 @@ class PythonBridge: NSObject {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
+
+            let gilState = PyGILState_Ensure()
+            defer { PyGILState_Release(gilState) }
 
             let wrappedCode = """
             import json as _json
@@ -104,15 +115,8 @@ class PythonBridge: NSObject {
                 return
             }
 
-            // Read the result
-            let readCode = """
-            import sys as _sys
-            if _bridge_result is not None:
-                _sys.stdout.write("BRIDGE_RESULT:" + str(_bridge_result) + ":END_RESULT")
-                _sys.stdout.flush()
-            """
-            // For simplicity, use a file-based approach
-            let tmpPath = NSTemporaryDirectory() + "bridge_result.txt"
+            // Use unique temp file to avoid race conditions
+            let tmpPath = NSTemporaryDirectory() + "bridge_result_\(UUID().uuidString).txt"
             let fileCode = """
             with open('\(tmpPath)', 'w') as _f:
                 _f.write(str(_bridge_result) if _bridge_result else '')
@@ -120,6 +124,7 @@ class PythonBridge: NSObject {
             PyRun_SimpleString(fileCode)
 
             let result = try? String(contentsOfFile: tmpPath, encoding: .utf8)
+            try? FileManager.default.removeItem(atPath: tmpPath)
             DispatchQueue.main.async { completion(result) }
         }
     }
@@ -172,7 +177,8 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "INVALID_ARGS", message: "Missing 'deviceCode'", details: nil))
                 return
             }
-            bridge.runWithResult("tiddl_bridge.check_auth_token('\(deviceCode)')") { response in
+            let safeCode = bridge.pythonEscape(deviceCode)
+            bridge.runWithResult("tiddl_bridge.check_auth_token('\(safeCode)')") { response in
                 result(response)
             }
 
@@ -187,7 +193,8 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "INVALID_ARGS", message: "Missing 'url'", details: nil))
                 return
             }
-            bridge.runWithResult("tiddl_bridge.get_track_info('\(url)')") { response in
+            let safeUrl = bridge.pythonEscape(url)
+            bridge.runWithResult("tiddl_bridge.get_track_info('\(safeUrl)')") { response in
                 result(response)
             }
 
@@ -198,7 +205,9 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 return
             }
             let quality = (args["quality"] as? String) ?? "LOSSLESS"
-            bridge.runWithResult("tiddl_bridge.download_track('\(url)', '\(quality)')") { response in
+            let safeUrl = bridge.pythonEscape(url)
+            let safeQuality = bridge.pythonEscape(quality)
+            bridge.runWithResult("tiddl_bridge.download_track('\(safeUrl)', '\(safeQuality)')") { response in
                 result(response)
             }
 
