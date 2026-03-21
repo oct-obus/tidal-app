@@ -10,8 +10,9 @@ env:
   PYTHON_BUILD: "b13"
 
 jobs:
-  build-ios:
-    name: 🍎 Build unsigned IPA
+  # --- Simulator smoke test: verify Python initializes ---
+  test-simulator:
+    name: 📱 Simulator smoke test
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,8 +26,6 @@ jobs:
 
       - run: flutter pub get
 
-      # --- Python Integration ---
-
       - name: Download Python iOS support
         run: |
           curl -sL -o python-ios.tar.gz \
@@ -37,11 +36,9 @@ jobs:
       - name: Place Python.xcframework
         run: mv ios/PythonSupport/Python.xcframework ios/Python.xcframework
 
-      - name: Copy Python bridge into project
-        run: cp scripts/PythonBridge.swift ios/Runner/PythonBridge.swift
-
-      - name: Register plugin in AppDelegate
+      - name: Setup project for Python
         run: |
+          cp scripts/PythonBridge.swift ios/Runner/PythonBridge.swift
           cat > ios/Runner/AppDelegate.swift << 'SWIFT'
           import Flutter
           import UIKit
@@ -58,21 +55,129 @@ jobs:
             }
           }
           SWIFT
-          echo "AppDelegate.swift written:"
-          cat ios/Runner/AppDelegate.swift
+          gem install xcodeproj --no-document
+          ruby scripts/setup_python.rb
+          mkdir -p ios/Runner/python/app ios/Runner/python/app_packages
 
-      - name: Install xcodeproj gem
-        run: gem install xcodeproj --no-document
-
-      - name: Modify Xcode project for Python
-        run: ruby scripts/setup_python.rb
-
-      - name: Create Python app directories
+      - name: Install Python packages
         run: |
-          mkdir -p ios/Runner/python/app
-          mkdir -p ios/Runner/python/app_packages
+          python3 -m venv /tmp/pip-venv
+          source /tmp/pip-venv/bin/activate
+          pip install tiddl --target=python_packages_built --no-compile
+          pip install certifi --target=python_packages_built --no-compile
+          deactivate
 
-      # --- Install tiddl + dependencies ---
+      - name: Clean packages for iOS
+        run: |
+          cd python_packages_built
+          find . -name "*.so" -delete && find . -name "*.dylib" -delete
+          find . -name "*.dist-info" -type d -exec rm -rf {} + 2>/dev/null || true
+          find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+          find . \( -name "tests" -o -name "test" \) -type d -exec rm -rf {} + 2>/dev/null || true
+          rm -rf pydantic pydantic_core ffmpeg_asyncio
+
+      - name: Build for simulator
+        run: flutter build ios --simulator --debug
+
+      - name: Install Python into simulator app
+        run: |
+          chmod +x scripts/post_build.sh
+          bash scripts/post_build.sh \
+            build/ios/iphonesimulator/Runner.app \
+            ios/Python.xcframework
+
+      - name: Run simulator smoke test
+        timeout-minutes: 3
+        run: |
+          # Create and boot simulator
+          DEVICE_ID=$(xcrun simctl create "PythonTest" "iPhone 16")
+          xcrun simctl boot "$DEVICE_ID"
+
+          # Install app
+          xcrun simctl install "$DEVICE_ID" build/ios/iphonesimulator/Runner.app
+
+          # Launch with console output (captures NSLog)
+          timeout 15 xcrun simctl launch --console-pty "$DEVICE_ID" com.obus.tidalApp \
+            2>&1 | tee /tmp/sim_output.txt &
+          LAUNCH_PID=$!
+
+          # Wait for Python to initialize (or timeout)
+          for i in $(seq 1 15); do
+            if grep -q "PythonBridge:" /tmp/sim_output.txt 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          # Check results
+          echo "=== Simulator output ==="
+          cat /tmp/sim_output.txt
+
+          # Cleanup
+          kill $LAUNCH_PID 2>/dev/null || true
+          xcrun simctl shutdown "$DEVICE_ID" 2>/dev/null || true
+          xcrun simctl delete "$DEVICE_ID" 2>/dev/null || true
+
+          # Verify Python initialized
+          if grep -q "Python initialized successfully" /tmp/sim_output.txt; then
+            echo "✅ PASS: Python initialized in simulator"
+          elif grep -q "PythonBridgePlugin" /tmp/sim_output.txt; then
+            echo "⚠️ WARN: Plugin registered but Python may have failed to init"
+            echo "Check output above for details"
+          else
+            echo "❌ FAIL: No Python bridge output detected"
+            exit 1
+          fi
+
+  # --- Device build: produce unsigned IPA ---
+  build-ios:
+    name: 🍎 Build unsigned IPA
+    runs-on: macos-latest
+    needs: test-simulator
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Generate platform files
+        run: flutter create --org com.obus --project-name tidal_app .
+
+      - run: flutter pub get
+
+      - name: Download Python iOS support
+        run: |
+          curl -sL -o python-ios.tar.gz \
+            "https://github.com/beeware/Python-Apple-support/releases/download/${{ env.PYTHON_VERSION }}-${{ env.PYTHON_BUILD }}/Python-${{ env.PYTHON_VERSION }}-iOS-support.${{ env.PYTHON_BUILD }}.tar.gz"
+          mkdir -p ios/PythonSupport
+          tar xzf python-ios.tar.gz -C ios/PythonSupport
+
+      - name: Place Python.xcframework
+        run: mv ios/PythonSupport/Python.xcframework ios/Python.xcframework
+
+      - name: Setup project for Python
+        run: |
+          cp scripts/PythonBridge.swift ios/Runner/PythonBridge.swift
+          cat > ios/Runner/AppDelegate.swift << 'SWIFT'
+          import Flutter
+          import UIKit
+
+          @main
+          @objc class AppDelegate: FlutterAppDelegate {
+            override func application(
+              _ application: UIApplication,
+              didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+            ) -> Bool {
+              GeneratedPluginRegistrant.register(with: self)
+              PythonBridgePlugin.register(with: self.registrar(forPlugin: "PythonBridgePlugin")!)
+              return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+            }
+          }
+          SWIFT
+          gem install xcodeproj --no-document
+          ruby scripts/setup_python.rb
+          mkdir -p ios/Runner/python/app ios/Runner/python/app_packages
 
       - name: Install Python packages
         run: |
@@ -87,29 +192,16 @@ jobs:
       - name: Clean packages for iOS
         run: |
           cd python_packages_built
-          # Remove macOS-only .so/.dylib files (wrong architecture)
-          find . -name "*.so" -delete
-          find . -name "*.dylib" -delete
-          # Remove dist-info to save space
+          find . -name "*.so" -delete && find . -name "*.dylib" -delete
           find . -name "*.dist-info" -type d -exec rm -rf {} + 2>/dev/null || true
-          # Remove __pycache__
           find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
-          # Remove tests
-          find . -name "tests" -type d -exec rm -rf {} + 2>/dev/null || true
-          find . -name "test" -type d -exec rm -rf {} + 2>/dev/null || true
-          # Remove pydantic and pydantic_core (we use our own shim)
-          rm -rf pydantic pydantic_core
-          # Remove ffmpeg_asyncio (we use our own shim)
-          rm -rf ffmpeg_asyncio
+          find . \( -name "tests" -o -name "test" \) -type d -exec rm -rf {} + 2>/dev/null || true
+          rm -rf pydantic pydantic_core ffmpeg_asyncio
           cd ..
           echo "Cleaned packages size: $(du -sh python_packages_built | cut -f1)"
 
-      # --- Build ---
-
       - name: Build iOS (no codesign)
         run: flutter build ios --release --no-codesign
-
-      # --- Post-build: Install Python into app bundle ---
 
       - name: Install Python into app bundle
         run: |
