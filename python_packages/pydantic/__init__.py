@@ -166,11 +166,35 @@ class BaseModel(metaclass=_BaseModelMeta):
         # Handle list[X]
         if origin is list and args and isinstance(value, list):
             item_type = args[0]
+            item_origin = getattr(item_type, '__origin__', None)
+            
             if isinstance(item_type, type) and issubclass(item_type, BaseModel):
                 return [
                     item_type.model_validate(item) if isinstance(item, dict) else item
                     for item in value
                 ]
+            # Handle list[Union[A, B, ...]]
+            elif item_origin is getattr(typing, 'Union', None):
+                union_args = getattr(item_type, '__args__', ())
+                coerced = []
+                for item in value:
+                    if isinstance(item, dict):
+                        converted = False
+                        for uarg in union_args:
+                            if uarg is type(None):
+                                continue
+                            if isinstance(uarg, type) and issubclass(uarg, BaseModel):
+                                try:
+                                    coerced.append(uarg.model_validate(item))
+                                    converted = True
+                                    break
+                                except Exception:
+                                    continue
+                        if not converted:
+                            coerced.append(item)
+                    else:
+                        coerced.append(item)
+                return coerced
             return value
         
         # Handle Union types (including Optional)
@@ -252,7 +276,20 @@ class BaseModel(metaclass=_BaseModelMeta):
     
     def model_dump_json(self, **kwargs):
         """Serialize to JSON string."""
-        return json.dumps(self.model_dump(**kwargs))
+        import json as _json
+        from datetime import datetime as _dt
+        from pathlib import Path as _Path
+        
+        class _Encoder(_json.JSONEncoder):
+            def default(self, obj):
+                if isinstance(obj, _dt):
+                    return obj.isoformat()
+                if isinstance(obj, _Path):
+                    return str(obj)
+                return super().default(obj)
+        
+        indent = kwargs.pop('indent', None)
+        return _json.dumps(self.model_dump(), cls=_Encoder, indent=indent)
     
     def __repr__(self):
         hints = get_type_hints(type(self))
