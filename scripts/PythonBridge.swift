@@ -82,7 +82,7 @@ class PythonBridge: NSObject {
     }
 
     /// Escape a string for safe inclusion in Python string literals
-    private func pythonEscape(_ s: String) -> String {
+    func pythonEscape(_ s: String) -> String {
         return s.replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "'", with: "\\'")
                 .replacingOccurrences(of: "\n", with: "\\n")
