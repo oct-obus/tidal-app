@@ -24,6 +24,11 @@ jobs:
       - name: Generate platform files
         run: flutter create --org com.obus --project-name tidal_app .
 
+      - name: Configure iOS capabilities
+        run: |
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" ios/Runner/Info.plist
+
       - run: flutter pub get
 
       - name: Download Python iOS support
@@ -178,6 +183,11 @@ jobs:
 
       - name: Generate platform files
         run: flutter create --org com.obus --project-name tidal_app .
+
+      - name: Configure iOS capabilities
+        run: |
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" ios/Runner/Info.plist
 
       - run: flutter pub get
 

@@ -3,9 +3,16 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:just_audio_background/just_audio_background.dart';
+import 'package:audio_service/audio_service.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-void main() {
+Future<void> main() async {
+  await JustAudioBackground.init(
+    androidNotificationChannelId: 'com.obus.tidal_app.audio',
+    androidNotificationChannelName: 'Audio playback',
+    androidNotificationOngoing: true,
+  );
   runApp(const TidalApp());
 }
 
@@ -49,7 +56,10 @@ class _HomePageState extends State<HomePage> {
   String? _downloadedPath;
   String? _trackTitle;
   String? _trackArtist;
+  String? _trackAlbum;
   String? _pythonVersion;
+  String _downloadStep = '';
+  double _playbackSpeed = 1.0;
 
   // Auth flow state
   String? _authUserCode;
@@ -58,6 +68,8 @@ class _HomePageState extends State<HomePage> {
   Timer? _authPollTimer;
   int _authPollInterval = 5;
   DateTime? _lastPollTime;
+
+  static const _speedPresets = [0.75, 1.0, 1.25, 1.5, 2.0];
 
   @override
   void initState() {
@@ -115,7 +127,6 @@ class _HomePageState extends State<HomePage> {
     try {
       await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
     } catch (_) {
-      // Fallback: open in external browser
       try {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
       } catch (e) {
@@ -162,12 +173,10 @@ class _HomePageState extends State<HomePage> {
         _status = 'Enter code: $_authUserCode';
       });
 
-      // Open auth page (try in-app browser, fall back to external)
       if (_authVerifyUrl != null) {
         await _openAuthUrl(_authVerifyUrl!);
       }
 
-      // Start polling for token
       _lastPollTime = DateTime.now();
       _authPollTimer = Timer.periodic(
         Duration(seconds: _authPollInterval),
@@ -245,6 +254,7 @@ class _HomePageState extends State<HomePage> {
         _currentFilePath = null;
         _trackTitle = null;
         _trackArtist = null;
+        _trackAlbum = null;
         _status = 'Logged out';
       });
     } catch (e) {
@@ -258,13 +268,28 @@ class _HomePageState extends State<HomePage> {
 
     setState(() {
       _isDownloading = true;
-      _status = 'Downloading...';
-      _downloadedPath = null;
-      _trackTitle = null;
-      _trackArtist = null;
+      _downloadStep = 'Looking up track...';
+      _status = 'Looking up track...';
     });
 
     try {
+      // Step 1: Get track info
+      final infoResponse = await _channel.invokeMethod<String>(
+        'getTrackInfo',
+        {'url': url},
+      );
+      if (infoResponse != null) {
+        final infoData = jsonDecode(infoResponse);
+        if (infoData['success'] == true) {
+          final info = infoData['data'];
+          setState(() {
+            _downloadStep = 'Downloading: ${info['title']}...';
+            _status = 'Downloading: ${info['title']}...';
+          });
+        }
+      }
+
+      // Step 2: Download
       final response = await _channel.invokeMethod<String>('download', {'url': url});
       if (response == null) {
         setState(() => _status = 'Download failed: no response');
@@ -275,10 +300,12 @@ class _HomePageState extends State<HomePage> {
       if (data['success'] == true) {
         final dl = data['data'];
         setState(() {
+          _downloadStep = '';
           _status = 'Downloaded: ${dl['title']}';
           _downloadedPath = dl['filePath'];
           _trackTitle = dl['title'];
           _trackArtist = dl['artist'];
+          _trackAlbum = dl['album'];
         });
       } else {
         setState(() => _status = 'Error: ${data['error']}');
@@ -288,7 +315,10 @@ class _HomePageState extends State<HomePage> {
     } on MissingPluginException {
       setState(() => _status = 'Python bridge not available');
     } finally {
-      setState(() => _isDownloading = false);
+      setState(() {
+        _isDownloading = false;
+        _downloadStep = '';
+      });
     }
   }
 
@@ -298,13 +328,27 @@ class _HomePageState extends State<HomePage> {
     if (_isPlaying) {
       await _player.pause();
     } else {
-      // Only set file path if it changed
       if (_currentFilePath != _downloadedPath) {
-        await _player.setFilePath(_downloadedPath!);
+        await _player.setAudioSource(
+          AudioSource.file(
+            _downloadedPath!,
+            tag: MediaItem(
+              id: _downloadedPath!,
+              title: _trackTitle ?? 'Unknown',
+              artist: _trackArtist ?? 'Unknown',
+              album: _trackAlbum ?? '',
+            ),
+          ),
+        );
         _currentFilePath = _downloadedPath;
       }
       await _player.play();
     }
+  }
+
+  Future<void> _setSpeed(double speed) async {
+    await _player.setSpeed(speed);
+    setState(() => _playbackSpeed = speed);
   }
 
   @override
@@ -405,7 +449,7 @@ class _HomePageState extends State<HomePage> {
             // URL input
             TextField(
               controller: _urlController,
-              enabled: _isAuthenticated,
+              enabled: _isAuthenticated && !_isDownloading,
               decoration: InputDecoration(
                 labelText: 'Tidal URL',
                 hintText: 'https://tidal.com/browse/track/...',
@@ -413,7 +457,7 @@ class _HomePageState extends State<HomePage> {
                 prefixIcon: const Icon(Icons.link),
                 suffixIcon: IconButton(
                   icon: const Icon(Icons.paste),
-                  onPressed: _isAuthenticated
+                  onPressed: (_isAuthenticated && !_isDownloading)
                       ? () async {
                           final data = await Clipboard.getData('text/plain');
                           if (data?.text != null) {
@@ -435,7 +479,9 @@ class _HomePageState extends State<HomePage> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.download),
-              label: Text(_isDownloading ? 'Downloading...' : 'Download'),
+              label: Text(_isDownloading
+                  ? (_downloadStep.isNotEmpty ? _downloadStep : 'Downloading...')
+                  : 'Download'),
             ),
             const SizedBox(height: 24),
             // Status / Player card
@@ -477,10 +523,46 @@ class _HomePageState extends State<HomePage> {
                     ),
                     if (_downloadedPath != null) ...[
                       const SizedBox(height: 16),
+                      // Play/pause button
                       FilledButton.tonalIcon(
                         onPressed: _togglePlayback,
                         icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
                         label: Text(_isPlaying ? 'Pause' : 'Play'),
+                      ),
+                      const SizedBox(height: 16),
+                      // Speed control
+                      Row(
+                        children: [
+                          const Icon(Icons.speed, size: 18),
+                          const SizedBox(width: 8),
+                          Text('${(_playbackSpeed * 100).round()}%',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              )),
+                          Expanded(
+                            child: Slider(
+                              value: _playbackSpeed,
+                              min: 0.5,
+                              max: 2.0,
+                              divisions: 30,
+                              label: '${(_playbackSpeed * 100).round()}%',
+                              onChanged: (v) => _setSpeed(v),
+                            ),
+                          ),
+                        ],
+                      ),
+                      // Speed presets
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: _speedPresets.map((speed) {
+                          final isActive = (_playbackSpeed - speed).abs() < 0.01;
+                          return FilterChip(
+                            label: Text('${(speed * 100).round()}%'),
+                            selected: isActive,
+                            onSelected: (_) => _setSpeed(speed),
+                            visualDensity: VisualDensity.compact,
+                          );
+                        }).toList(),
                       ),
                     ],
                   ],
