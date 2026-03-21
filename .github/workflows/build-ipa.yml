@@ -100,33 +100,39 @@ jobs:
             ios/Python.xcframework
 
       - name: Run simulator smoke test
-        timeout-minutes: 5
+        timeout-minutes: 8
         run: |
           set +e  # Don't exit on individual command failures
 
           # Create and boot simulator
+          echo "$(date +%T) Creating simulator..."
           DEVICE_ID=$(xcrun simctl create "PythonTest" "iPhone 16")
           xcrun simctl boot "$DEVICE_ID"
-          echo "Simulator booted: $DEVICE_ID"
+          echo "$(date +%T) Simulator booted: $DEVICE_ID"
 
           # Install app
           xcrun simctl install "$DEVICE_ID" build/ios/iphonesimulator/Runner.app
-          echo "App installed"
+          echo "$(date +%T) App installed"
 
           # Launch app (without --console to avoid PTY issues)
           xcrun simctl launch "$DEVICE_ID" com.obus.tidalApp
-          echo "App launched, waiting for initialization..."
+          echo "$(date +%T) App launched, waiting for initialization..."
 
           # Wait for Python to initialize
-          sleep 10
+          sleep 15
 
-          # Collect logs from the device
-          echo "=== Collecting device logs ==="
-          xcrun simctl spawn "$DEVICE_ID" log show \
-            --last 30s \
+          # Collect logs from the device (with 30s safety timeout)
+          echo "$(date +%T) Collecting device logs..."
+          ( xcrun simctl spawn "$DEVICE_ID" log show \
+            --last 60s \
             --predicate 'process == "Runner"' \
             --style compact \
-            2>&1 | tee /tmp/sim_logs.txt
+            2>&1 | head -2000 > /tmp/sim_logs.txt ) &
+          LOG_PID=$!
+          sleep 30
+          kill $LOG_PID 2>/dev/null || true
+          wait $LOG_PID 2>/dev/null || true
+          echo "$(date +%T) Log collection done ($(wc -l < /tmp/sim_logs.txt) lines)"
 
           echo "=== Log output (filtered) ==="
           grep -i "python\|bridge\|tiddl\|error\|fatal\|crash\|import" /tmp/sim_logs.txt || echo "(no matching lines)"
