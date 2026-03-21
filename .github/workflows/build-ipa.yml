@@ -59,11 +59,11 @@ jobs:
 
       - name: Install Python packages
         run: |
-          python3 -m pip install --upgrade pip
-          # Install tiddl and all deps to a target directory
-          pip3 install tiddl --target=python_packages_built --no-compile
-          # Install certifi for SSL certs
-          pip3 install certifi --target=python_packages_built --no-compile
+          python3 -m venv /tmp/pip-venv
+          source /tmp/pip-venv/bin/activate
+          pip install tiddl --target=python_packages_built --no-compile
+          pip install certifi --target=python_packages_built --no-compile
+          deactivate
           echo "Installed packages:"
           ls python_packages_built/
 
