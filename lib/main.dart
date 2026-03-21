@@ -55,6 +55,8 @@ class _HomePageState extends State<HomePage> {
   String? _authVerifyUrl;
   String? _authDeviceCode;
   Timer? _authPollTimer;
+  int _authPollInterval = 5;
+  DateTime? _lastPollTime;
 
   @override
   void initState() {
@@ -118,18 +120,22 @@ class _HomePageState extends State<HomePage> {
         _authUserCode = authData['userCode'];
         _authVerifyUrl = authData['verificationUriComplete'];
         _authDeviceCode = authData['deviceCode'];
+        _authPollInterval = (authData['interval'] as int?) ?? 5;
         _status = 'Enter code: $_authUserCode';
       });
 
-      // Open browser
+      // Open in-app browser (SFSafariViewController on iOS)
       final uri = Uri.parse(_authVerifyUrl!);
       if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
+        await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
       }
 
-      // Start polling for token
-      final interval = (authData['interval'] as int?) ?? 5;
-      _authPollTimer = Timer.periodic(Duration(seconds: interval), (_) => _pollAuth());
+      // Start polling for token with proper interval
+      _lastPollTime = DateTime.now();
+      _authPollTimer = Timer.periodic(
+        Duration(seconds: _authPollInterval),
+        (_) => _pollAuth(),
+      );
     } catch (e) {
       setState(() => _status = 'Auth error: $e');
     }
@@ -137,6 +143,14 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _pollAuth() async {
     if (_authDeviceCode == null) return;
+
+    // Rate limit: skip if less than interval since last poll
+    final now = DateTime.now();
+    if (_lastPollTime != null &&
+        now.difference(_lastPollTime!).inSeconds < _authPollInterval) {
+      return;
+    }
+    _lastPollTime = now;
 
     try {
       final response = await _channel.invokeMethod<String>(
@@ -260,7 +274,7 @@ class _HomePageState extends State<HomePage> {
                       const SizedBox(height: 8),
                       Text(
                         _authUserCode != null
-                            ? 'Enter code at tidal.com/pair:'
+                            ? 'Open the link and enter this code:'
                             : 'Log in to Tidal to download music',
                         style: theme.textTheme.bodyMedium,
                         textAlign: TextAlign.center,
@@ -274,6 +288,31 @@ class _HomePageState extends State<HomePage> {
                             letterSpacing: 4,
                           ),
                         ),
+                        const SizedBox(height: 8),
+                        if (_authVerifyUrl != null)
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              TextButton.icon(
+                                onPressed: () async {
+                                  final uri = Uri.parse(_authVerifyUrl!);
+                                  await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
+                                },
+                                icon: const Icon(Icons.open_in_browser, size: 16),
+                                label: const Text('Open login page'),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.copy, size: 16),
+                                tooltip: 'Copy link',
+                                onPressed: () {
+                                  Clipboard.setData(ClipboardData(text: _authVerifyUrl!));
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Link copied!')),
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
                         const SizedBox(height: 8),
                         const CircularProgressIndicator(strokeWidth: 2),
                         const SizedBox(height: 4),
