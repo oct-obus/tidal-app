@@ -38,11 +38,43 @@ target.source_build_phase.add_file_reference(bridge_ref)
 
 install_script = <<~SCRIPT
   set -e
-  # Source the Python xcframework utilities
-  source "$PROJECT_DIR/Python.xcframework/build/utils.sh"
 
-  # Install stdlib + process .so → .framework for signing
-  install_python Python.xcframework python/app python/app_packages
+  # Determine the right slice for the target platform
+  if [ "$EFFECTIVE_PLATFORM_NAME" = "-iphonesimulator" ]; then
+    SLICE_FOLDER="ios-arm64_x86_64-simulator"
+  else
+    SLICE_FOLDER="ios-arm64"
+  fi
+
+  PYTHON_FW="$PROJECT_DIR/Python.xcframework"
+  DEST="$CODESIGNING_FOLDER_PATH/python/lib"
+  mkdir -p "$DEST"
+
+  # Copy shared stdlib (pure Python modules)
+  if [ -d "$PYTHON_FW/lib" ]; then
+    rsync -au "$PYTHON_FW/lib/" "$DEST/"
+    # Copy arch-specific stdlib additions
+    if [ -d "$PYTHON_FW/$SLICE_FOLDER/lib-$ARCHS" ]; then
+      rsync -au "$PYTHON_FW/$SLICE_FOLDER/lib-$ARCHS/" "$DEST/"
+    fi
+  else
+    rsync -au "$PYTHON_FW/$SLICE_FOLDER/lib/" "$DEST/" --exclude 'libpython*.dylib'
+  fi
+
+  # Remove .so files for unsigned builds (can't do framework conversion without signing)
+  find "$DEST" -name "*.so" -delete
+
+  # Copy app code and packages
+  if [ -d "$PROJECT_DIR/Runner/python/app" ]; then
+    mkdir -p "$CODESIGNING_FOLDER_PATH/python/app"
+    rsync -au "$PROJECT_DIR/Runner/python/app/" "$CODESIGNING_FOLDER_PATH/python/app/"
+  fi
+  if [ -d "$PROJECT_DIR/Runner/python/app_packages" ]; then
+    mkdir -p "$CODESIGNING_FOLDER_PATH/python/app_packages"
+    rsync -au "$PROJECT_DIR/Runner/python/app_packages/" "$CODESIGNING_FOLDER_PATH/python/app_packages/"
+  fi
+
+  echo "Python stdlib installed (pure Python only, no C extensions)"
 SCRIPT
 
 script_phase = project.new(Xcodeproj::Project::Object::PBXShellScriptBuildPhase)
