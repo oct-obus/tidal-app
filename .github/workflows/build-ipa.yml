@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  PYTHON_VERSION: "3.13"
+  PYTHON_BUILD: "b13"
+
 jobs:
   build-ios:
     name: 🍎 Build unsigned IPA
@@ -20,6 +24,41 @@ jobs:
         run: flutter create --org com.obus --project-name tidal_app .
 
       - run: flutter pub get
+
+      # --- Python Integration ---
+
+      - name: Download Python iOS support
+        run: |
+          curl -sL -o python-ios.tar.gz \
+            "https://github.com/beeware/Python-Apple-support/releases/download/${{ env.PYTHON_VERSION }}-${{ env.PYTHON_BUILD }}/Python-${{ env.PYTHON_VERSION }}-iOS-support.${{ env.PYTHON_BUILD }}.tar.gz"
+          mkdir -p ios/PythonSupport
+          tar xzf python-ios.tar.gz -C ios/PythonSupport
+
+      - name: Place Python.xcframework
+        run: |
+          mv ios/PythonSupport/Python.xcframework ios/Python.xcframework
+
+      - name: Copy Python bridge into project
+        run: cp scripts/PythonBridge.swift ios/Runner/PythonBridge.swift
+
+      - name: Register plugin in AppDelegate
+        run: |
+          # Add PythonBridgePlugin registration to the Flutter-generated AppDelegate
+          sed -i '' 's/GeneratedPluginRegistrant.register(with: self)/GeneratedPluginRegistrant.register(with: self)\n    PythonBridgePlugin.register(with: self.registrar(forPlugin: "PythonBridgePlugin")!)/' ios/Runner/AppDelegate.swift
+
+      - name: Install xcodeproj gem
+        run: gem install xcodeproj --no-document
+
+      - name: Modify Xcode project for Python
+        run: ruby scripts/setup_python.rb
+
+      - name: Create Python app directories
+        run: |
+          mkdir -p ios/Runner/python/app
+          mkdir -p ios/Runner/python/app_packages
+          echo "print('Hello from embedded Python!')" > ios/Runner/python/app/__init__.py
+
+      # --- Build ---
 
       - name: Build iOS (no codesign)
         run: flutter build ios --release --no-codesign
