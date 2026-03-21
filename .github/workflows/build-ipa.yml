@@ -78,13 +78,13 @@ jobs:
 
       - name: Verify tiddl package integrity
         run: |
-          echo "=== Verify tiddl package ==="
-          for f in tiddl/__init__.py tiddl/auth.py tiddl/api.py tiddl/config.py tiddl/download.py tiddl/utils.py tiddl/models/__init__.py tiddl/models/auth.py; do
+          echo "=== Verify tiddl v3 package ==="
+          for f in tiddl/__init__.py tiddl/core/__init__.py tiddl/core/auth/__init__.py tiddl/core/auth/api.py tiddl/core/auth/client.py tiddl/core/auth/models.py tiddl/core/api/__init__.py tiddl/core/api/api.py tiddl/core/api/client.py tiddl/core/utils/download.py tiddl/cli/utils/resource.py; do
             if [ -f "python_packages_built/$f" ]; then echo "  ✓ $f"
             else echo "  ✗ $f MISSING!"; exit 1; fi
           done
           echo "=== Verify other critical packages ==="
-          for pkg in requests urllib3 idna certifi mutagen aiohttp m3u8; do
+          for pkg in requests urllib3 idna certifi mutagen m3u8 requests_cache; do
             if [ -d "python_packages_built/$pkg" ]; then echo "  ✓ $pkg/"
             else echo "  ⚠ $pkg/ not found (may be single-file)"; fi
           done
@@ -231,7 +231,7 @@ jobs:
 
       - name: Verify tiddl package integrity
         run: |
-          for f in tiddl/__init__.py tiddl/auth.py tiddl/api.py tiddl/config.py tiddl/download.py tiddl/utils.py tiddl/models/__init__.py tiddl/models/auth.py; do
+          for f in tiddl/__init__.py tiddl/core/__init__.py tiddl/core/auth/__init__.py tiddl/core/auth/api.py tiddl/core/api/__init__.py tiddl/core/api/api.py tiddl/core/utils/download.py tiddl/cli/utils/resource.py; do
             if [ -f "python_packages_built/$f" ]; then echo "  ✓ $f"
             else echo "  ✗ $f MISSING!"; exit 1; fi
           done

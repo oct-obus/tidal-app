@@ -1,12 +1,11 @@
 """
-tiddl_bridge.py — iOS bridge for tiddl (Tidal downloader).
+tiddl_bridge.py — iOS bridge for tiddl v3 (Tidal downloader).
 Called from Swift PythonBridge via PyRun_SimpleString.
 
 Provides functions for:
 - Authentication (device code flow)
 - Track info lookup
 - Track downloading
-- Progress reporting via callback mechanism
 """
 
 import os
@@ -24,7 +23,7 @@ logger.info(f"sys.path = {sys.path}")
 
 # Test critical imports eagerly so we catch issues at startup
 _import_errors = []
-for _mod in ["tiddl", "tiddl.auth", "tiddl.api", "tiddl.utils", "tiddl.models", "requests", "pydantic"]:
+for _mod in ["tiddl", "tiddl.core.auth", "tiddl.core.api", "tiddl.core.utils", "requests", "pydantic"]:
     try:
         __import__(_mod)
         logger.info(f"  ✓ import {_mod}")
@@ -62,8 +61,9 @@ def start_device_auth():
     """Start Tidal device code authentication flow.
     Returns JSON with deviceCode, userCode, verificationUri."""
     try:
-        from tiddl.auth import getDeviceAuth
-        resp = getDeviceAuth()
+        from tiddl.core.auth import AuthAPI
+        auth_api = AuthAPI()
+        resp = auth_api.get_device_auth()
         return _result(True, {
             "deviceCode": resp.deviceCode,
             "userCode": resp.userCode,
@@ -81,9 +81,9 @@ def check_auth_token(device_code):
     """Poll for auth token after user authorizes.
     Returns JSON with token info or pending status."""
     try:
-        from tiddl.auth import getToken
-        resp = getToken(device_code)
-        # Save config
+        from tiddl.core.auth import AuthAPI
+        auth_api = AuthAPI()
+        resp = auth_api.get_auth(device_code)
         config_data = {
             "auth": {
                 "token": resp.access_token,
@@ -122,12 +122,13 @@ def refresh_auth():
         with open(config_path) as f:
             config = json.load(f)
 
-        refresh_token = config.get("auth", {}).get("refresh_token", "")
-        if not refresh_token:
+        refresh_token_val = config.get("auth", {}).get("refresh_token", "")
+        if not refresh_token_val:
             return _result(False, error="No refresh token")
 
-        from tiddl.auth import refreshToken
-        resp = refreshToken(refresh_token)
+        from tiddl.core.auth import AuthAPI
+        auth_api = AuthAPI()
+        resp = auth_api.refresh_token(refresh_token_val)
 
         config["auth"]["token"] = resp.access_token
         config["auth"]["expires"] = resp.expires_in
@@ -157,32 +158,44 @@ def get_auth_status():
         return _result(False, error=str(e))
 
 
+def _get_tidal_api():
+    """Create a TidalAPI instance from saved config."""
+    config_path = _get_config_path()
+    if not config_path or not os.path.exists(config_path):
+        raise RuntimeError("Not authenticated")
+
+    with open(config_path) as f:
+        config = json.load(f)
+
+    auth = config.get("auth", {})
+    from tiddl.core.api import TidalAPI, TidalClient
+
+    cache_dir = os.path.join(DOCUMENTS_DIR, "cache") if DOCUMENTS_DIR else "/tmp"
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, "tidal_cache")
+
+    client = TidalClient(
+        token=auth["token"],
+        cache_name=cache_path,
+    )
+    return TidalAPI(
+        client=client,
+        user_id=str(auth["user_id"]),
+        country_code=auth.get("country_code", "US"),
+    )
+
+
 def get_track_info(url_or_id):
-    """Get track info from Tidal URL or ID.
-    Returns JSON with track title, artist, album, duration."""
+    """Get track info from Tidal URL or ID."""
     try:
-        config_path = _get_config_path()
-        if not config_path or not os.path.exists(config_path):
-            return _result(False, error="Not authenticated")
+        from tiddl.cli.utils.resource import TidalResource
 
-        with open(config_path) as f:
-            config = json.load(f)
-
-        auth = config.get("auth", {})
-        from tiddl.api import TidalApi
-        from tiddl.utils import TidalResource
-
-        api = TidalApi(
-            token=auth["token"],
-            user_id=auth["user_id"],
-            country_code=auth.get("country_code", "US"),
-        )
-
-        resource = TidalResource.fromString(url_or_id)
+        api = _get_tidal_api()
+        resource = TidalResource.from_string(url_or_id)
         if resource.type != "track":
             return _result(False, error=f"Only track URLs supported, got: {resource.type}")
 
-        track = api.getTrack(resource.id)
+        track = api.get_track(resource.id)
         return _result(True, {
             "id": track.id,
             "title": track.title,
@@ -197,39 +210,21 @@ def get_track_info(url_or_id):
 
 
 def download_track(url_or_id, quality="LOSSLESS"):
-    """Download a track from Tidal.
-    Returns JSON with the local file path."""
+    """Download a track from Tidal."""
     try:
-        config_path = _get_config_path()
-        if not config_path or not os.path.exists(config_path):
-            return _result(False, error="Not authenticated")
+        from tiddl.cli.utils.resource import TidalResource
+        from tiddl.core.utils.download import get_track_stream_data
+        from tiddl.core.metadata import add_track_metadata, Cover
 
-        with open(config_path) as f:
-            config = json.load(f)
-
-        auth = config.get("auth", {})
-        from tiddl.api import TidalApi
-        from tiddl.utils import TidalResource
-        from tiddl.download import downloadTrackStream, parseTrackStream
-        from tiddl.metadata import addMetadata, Cover
-
-        api = TidalApi(
-            token=auth["token"],
-            user_id=auth["user_id"],
-            country_code=auth.get("country_code", "US"),
-        )
-
-        resource = TidalResource.fromString(url_or_id)
+        api = _get_tidal_api()
+        resource = TidalResource.from_string(url_or_id)
         if resource.type != "track":
             return _result(False, error=f"Only track URLs supported, got: {resource.type}")
 
-        track = api.getTrack(resource.id)
-        stream = api.getTrackStream(resource.id, quality)
+        track = api.get_track(resource.id)
+        stream = api.get_track_stream(resource.id, quality)
+        stream_data, file_ext = get_track_stream_data(stream)
 
-        # Download
-        stream_data, file_ext = downloadTrackStream(stream)
-
-        # Save to Documents
         download_dir = os.path.join(DOCUMENTS_DIR, "downloads")
         os.makedirs(download_dir, exist_ok=True)
 
@@ -240,20 +235,17 @@ def download_track(url_or_id, quality="LOSSLESS"):
         with open(file_path, "wb") as f:
             f.write(stream_data)
 
-        # Add metadata
         try:
             from pathlib import Path
             track_path = Path(file_path)
-
-            cover_data = b""
+            cover_data = None
             if track.album.cover:
                 try:
                     cover = Cover(track.album.cover)
-                    cover_data = cover.content
+                    cover_data = cover.fetch_data()
                 except Exception:
                     pass
-
-            addMetadata(track_path, track, cover_data=cover_data)
+            add_track_metadata(track_path, track, cover_data=cover_data)
         except Exception as e:
             logger.warning(f"Metadata error (non-fatal): {e}")
 
@@ -270,7 +262,6 @@ def download_track(url_or_id, quality="LOSSLESS"):
         return _result(False, error=str(e))
 
 
-# Quick test
 if __name__ == "__main__":
     print("tiddl_bridge loaded successfully")
     print(f"Python {sys.version}")
