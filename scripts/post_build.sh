@@ -26,9 +26,18 @@ mkdir -p "$STDLIB_DEST"
 # Copy shared stdlib (pure Python modules)
 if [ -d "$PYTHON_XCFW/lib" ]; then
     rsync -au "$PYTHON_XCFW/lib/" "$STDLIB_DEST/"
-    # Copy arch-specific modules (C extensions as .so)
-    if [ -d "$PYTHON_XCFW/ios-arm64/lib-arm64" ]; then
-        rsync -au "$PYTHON_XCFW/ios-arm64/lib-arm64/" "$STDLIB_DEST/"
+    # Select correct architecture slice based on app bundle path
+    if echo "$APP_BUNDLE" | grep -qi "simulator"; then
+        ARCH_LIB="$PYTHON_XCFW/ios-arm64_x86_64-simulator/lib-arm64"
+        echo "  Target: simulator (arm64)"
+    else
+        ARCH_LIB="$PYTHON_XCFW/ios-arm64/lib-arm64"
+        echo "  Target: device (arm64)"
+    fi
+    if [ -d "$ARCH_LIB" ]; then
+        rsync -au "$ARCH_LIB/" "$STDLIB_DEST/"
+    else
+        echo "WARNING: Architecture-specific lib not found at $ARCH_LIB"
     fi
 else
     rsync -au "$PYTHON_XCFW/ios-arm64/lib/" "$STDLIB_DEST/" --exclude 'libpython*.dylib'
