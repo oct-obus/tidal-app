@@ -45,6 +45,7 @@ class _HomePageState extends State<HomePage> {
   bool _isDownloading = false;
   bool _isAuthenticating = false;
   bool _isPlaying = false;
+  String? _currentFilePath;
   String? _downloadedPath;
   String? _trackTitle;
   String? _trackArtist;
@@ -61,7 +62,22 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    _listenToPlayerState();
     _initPython();
+  }
+
+  void _listenToPlayerState() {
+    _player.playerStateStream.listen((state) {
+      final playing = state.playing;
+      final completed = state.processingState == ProcessingState.completed;
+      setState(() {
+        _isPlaying = playing && !completed;
+      });
+      if (completed) {
+        _player.seek(Duration.zero);
+        _player.pause();
+      }
+    });
   }
 
   @override
@@ -74,11 +90,9 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _initPython() async {
     try {
-      // Get Python version
       final version = await _channel.invokeMethod<String>('pythonVersion');
       setState(() => _pythonVersion = version);
 
-      // Check auth status
       final authResponse = await _channel.invokeMethod<String>('authStatus');
       if (authResponse != null) {
         final data = jsonDecode(authResponse);
@@ -96,6 +110,24 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> _openAuthUrl(String url) async {
+    final uri = Uri.parse(url);
+    try {
+      await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
+    } catch (_) {
+      // Fallback: open in external browser
+      try {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not open URL: $e')),
+          );
+        }
+      }
+    }
+  }
+
   Future<void> _startAuth() async {
     setState(() {
       _isAuthenticating = true;
@@ -105,13 +137,19 @@ class _HomePageState extends State<HomePage> {
     try {
       final response = await _channel.invokeMethod<String>('startAuth');
       if (response == null) {
-        setState(() => _status = 'Auth failed: no response');
+        setState(() {
+          _isAuthenticating = false;
+          _status = 'Auth failed: no response';
+        });
         return;
       }
 
       final data = jsonDecode(response);
       if (data['success'] != true) {
-        setState(() => _status = 'Auth failed: ${data['error']}');
+        setState(() {
+          _isAuthenticating = false;
+          _status = 'Auth failed: ${data['error']}';
+        });
         return;
       }
 
@@ -124,27 +162,28 @@ class _HomePageState extends State<HomePage> {
         _status = 'Enter code: $_authUserCode';
       });
 
-      // Open in-app browser (SFSafariViewController on iOS)
-      final uri = Uri.parse(_authVerifyUrl!);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
+      // Open auth page (try in-app browser, fall back to external)
+      if (_authVerifyUrl != null) {
+        await _openAuthUrl(_authVerifyUrl!);
       }
 
-      // Start polling for token with proper interval
+      // Start polling for token
       _lastPollTime = DateTime.now();
       _authPollTimer = Timer.periodic(
         Duration(seconds: _authPollInterval),
         (_) => _pollAuth(),
       );
     } catch (e) {
-      setState(() => _status = 'Auth error: $e');
+      setState(() {
+        _isAuthenticating = false;
+        _status = 'Auth error: $e';
+      });
     }
   }
 
   Future<void> _pollAuth() async {
     if (_authDeviceCode == null) return;
 
-    // Rate limit: skip if less than interval since last poll
     final now = DateTime.now();
     if (_lastPollTime != null &&
         now.difference(_lastPollTime!).inSeconds < _authPollInterval) {
@@ -179,6 +218,37 @@ class _HomePageState extends State<HomePage> {
       }
     } catch (e) {
       // Keep polling
+    }
+  }
+
+  Future<void> _logout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Log out'),
+        content: const Text('This will clear your Tidal credentials. Continue?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Log out')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await _channel.invokeMethod<String>('logout');
+      await _player.stop();
+      setState(() {
+        _isAuthenticated = false;
+        _isPlaying = false;
+        _downloadedPath = null;
+        _currentFilePath = null;
+        _trackTitle = null;
+        _trackArtist = null;
+        _status = 'Logged out';
+      });
+    } catch (e) {
+      setState(() => _status = 'Logout error: $e');
     }
   }
 
@@ -228,10 +298,13 @@ class _HomePageState extends State<HomePage> {
     if (_isPlaying) {
       await _player.pause();
     } else {
-      await _player.setFilePath(_downloadedPath!);
+      // Only set file path if it changed
+      if (_currentFilePath != _downloadedPath) {
+        await _player.setFilePath(_downloadedPath!);
+        _currentFilePath = _downloadedPath;
+      }
       await _player.play();
     }
-    setState(() => _isPlaying = !_isPlaying);
   }
 
   @override
@@ -243,13 +316,13 @@ class _HomePageState extends State<HomePage> {
         title: const Text('Tidal Downloader'),
         centerTitle: true,
         actions: [
-          if (_isAuthenticated)
+          if (_isAuthenticated) ...[
             IconButton(
-              icon: const Icon(Icons.check_circle, color: Colors.green),
-              onPressed: () {},
-              tooltip: 'Authenticated',
-            )
-          else
+              icon: const Icon(Icons.logout),
+              onPressed: _logout,
+              tooltip: 'Log out',
+            ),
+          ] else
             IconButton(
               icon: const Icon(Icons.login),
               onPressed: _isAuthenticating ? null : _startAuth,
@@ -294,10 +367,7 @@ class _HomePageState extends State<HomePage> {
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               TextButton.icon(
-                                onPressed: () async {
-                                  final uri = Uri.parse(_authVerifyUrl!);
-                                  await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
-                                },
+                                onPressed: () => _openAuthUrl(_authVerifyUrl!),
                                 icon: const Icon(Icons.open_in_browser, size: 16),
                                 label: const Text('Open login page'),
                               ),

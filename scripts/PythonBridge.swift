@@ -190,6 +190,11 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(response)
             }
 
+        case "logout":
+            bridge.runWithResult("tiddl_bridge.logout()") { response in
+                result(response)
+            }
+
         case "refreshAuth":
             bridge.runWithResult("tiddl_bridge.refresh_auth()") { response in
                 result(response)

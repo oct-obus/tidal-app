@@ -142,6 +142,22 @@ def refresh_auth():
         return _result(False, error=str(e))
 
 
+def logout():
+    """Clear saved auth credentials."""
+    try:
+        config_path = _get_config_path()
+        if config_path and os.path.exists(config_path):
+            os.remove(config_path)
+        cache_dir = os.path.join(DOCUMENTS_DIR, "cache") if DOCUMENTS_DIR else None
+        if cache_dir and os.path.exists(cache_dir):
+            import shutil
+            shutil.rmtree(cache_dir, ignore_errors=True)
+        return _result(True, {"loggedOut": True})
+    except Exception as e:
+        logger.error(f"Logout error: {e}")
+        return _result(False, error=str(e))
+
+
 def get_auth_status():
     """Check if we have saved auth credentials."""
     try:
