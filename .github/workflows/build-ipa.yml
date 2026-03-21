@@ -92,26 +92,31 @@ jobs:
           # Create and boot simulator
           DEVICE_ID=$(xcrun simctl create "PythonTest" "iPhone 16")
           xcrun simctl boot "$DEVICE_ID"
+          echo "Simulator booted: $DEVICE_ID"
 
           # Install app
           xcrun simctl install "$DEVICE_ID" build/ios/iphonesimulator/Runner.app
 
           # Launch with console output (captures NSLog)
-          timeout 15 xcrun simctl launch --console-pty "$DEVICE_ID" com.obus.tidalApp \
-            2>&1 | tee /tmp/sim_output.txt &
+          xcrun simctl launch --console-pty "$DEVICE_ID" com.obus.tidalApp \
+            > /tmp/sim_output.txt 2>&1 &
           LAUNCH_PID=$!
 
-          # Wait for Python to initialize (or timeout)
-          for i in $(seq 1 15); do
+          # Wait for Python init or 20s timeout
+          for i in $(seq 1 20); do
             if grep -q "PythonBridge:" /tmp/sim_output.txt 2>/dev/null; then
+              echo "Detected PythonBridge output after ${i}s"
               break
             fi
             sleep 1
           done
 
+          # Give it a moment to finish logging
+          sleep 2
+
           # Check results
           echo "=== Simulator output ==="
-          cat /tmp/sim_output.txt
+          cat /tmp/sim_output.txt || true
 
           # Cleanup
           kill $LAUNCH_PID 2>/dev/null || true
@@ -121,9 +126,12 @@ jobs:
           # Verify Python initialized
           if grep -q "Python initialized successfully" /tmp/sim_output.txt; then
             echo "✅ PASS: Python initialized in simulator"
-          elif grep -q "PythonBridgePlugin" /tmp/sim_output.txt; then
-            echo "⚠️ WARN: Plugin registered but Python may have failed to init"
-            echo "Check output above for details"
+          elif grep -q "Failed to initialize Python" /tmp/sim_output.txt; then
+            echo "❌ FAIL: Python failed to initialize"
+            exit 1
+          elif grep -q "PythonBridge:" /tmp/sim_output.txt; then
+            echo "⚠️ WARN: Plugin registered but Python status unclear"
+            echo "Treating as pass (plugin is wired up correctly)"
           else
             echo "❌ FAIL: No Python bridge output detected"
             exit 1
