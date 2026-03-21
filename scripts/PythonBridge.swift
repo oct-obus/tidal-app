@@ -17,29 +17,59 @@ func Py_FinalizeEx() -> Int32
 @_silgen_name("setenv")
 func c_setenv(_ name: UnsafePointer<CChar>, _ value: UnsafePointer<CChar>, _ overwrite: Int32) -> Int32
 
+@_silgen_name("PyGILState_Ensure")
+func PyGILState_Ensure() -> Int32
+
+@_silgen_name("PyGILState_Release")
+func PyGILState_Release(_ state: Int32)
+
 class PythonBridge: NSObject {
     static let shared = PythonBridge()
     private var isInitialized = false
+    private let queue = DispatchQueue(label: "com.obus.python", qos: .userInitiated)
 
     func initialize() {
         guard !isInitialized else { return }
 
         let resourcePath = Bundle.main.resourcePath!
         let pythonHome = "\(resourcePath)/python"
+        let libPath = "\(resourcePath)/python/lib/python3.13"
+        let dynloadPath = "\(libPath)/lib-dynload"
         let appPath = "\(resourcePath)/python/app"
         let appPackages = "\(resourcePath)/python/app_packages"
-        let pythonPath = "\(appPath):\(appPackages)"
+        let pythonPath = "\(libPath):\(dynloadPath):\(appPath):\(appPackages)"
 
         _ = c_setenv("PYTHONHOME", pythonHome, 1)
         _ = c_setenv("PYTHONPATH", pythonPath, 1)
-        // Prevent writing .pyc files (read-only bundle)
         _ = c_setenv("PYTHONDONTWRITEBYTECODE", "1", 1)
+        _ = c_setenv("PYTHONUNBUFFERED", "1", 1)
+        // SSL certificate bundle
+        _ = c_setenv("SSL_CERT_FILE", "\(resourcePath)/python/lib/python3.13/certifi/cacert.pem", 1)
+
+        // Set TIDDL_PATH to Documents for config storage
+        let docs = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
+        _ = c_setenv("TIDDL_PATH", docs, 1)
 
         Py_Initialize()
         isInitialized = Py_IsInitialized() != 0
 
         if isInitialized {
             NSLog("PythonBridge: Python initialized successfully")
+            // Set up the tiddl bridge with documents path
+            let initCode = """
+            import sys
+            sys.path.insert(0, '\(appPackages)')
+            sys.path.insert(0, '\(appPath)')
+            try:
+                import tiddl_bridge
+                tiddl_bridge.set_documents_dir('\(docs)')
+                print('tiddl_bridge loaded')
+            except Exception as e:
+                print(f'Failed to load tiddl_bridge: {e}')
+                import traceback
+                traceback.print_exc()
+            """
+            PyRun_SimpleString(initCode)
         } else {
             NSLog("PythonBridge: Failed to initialize Python")
         }
@@ -49,6 +79,49 @@ class PythonBridge: NSObject {
         guard isInitialized else { return false }
         let result = PyRun_SimpleString(code)
         return result == 0
+    }
+
+    /// Run Python code that stores its result in `_bridge_result` and return it
+    func runWithResult(_ code: String, completion: @escaping (String?) -> Void) {
+        queue.async { [weak self] in
+            guard let self = self, self.isInitialized else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+
+            let wrappedCode = """
+            import json as _json
+            _bridge_result = None
+            try:
+                _bridge_result = (lambda: (\(code)))()
+            except Exception as _e:
+                _bridge_result = _json.dumps({"success": False, "error": str(_e)})
+            """
+
+            let success = PyRun_SimpleString(wrappedCode)
+            guard success == 0 else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+
+            // Read the result
+            let readCode = """
+            import sys as _sys
+            if _bridge_result is not None:
+                _sys.stdout.write("BRIDGE_RESULT:" + str(_bridge_result) + ":END_RESULT")
+                _sys.stdout.flush()
+            """
+            // For simplicity, use a file-based approach
+            let tmpPath = NSTemporaryDirectory() + "bridge_result.txt"
+            let fileCode = """
+            with open('\(tmpPath)', 'w') as _f:
+                _f.write(str(_bridge_result) if _bridge_result else '')
+            """
+            PyRun_SimpleString(fileCode)
+
+            let result = try? String(contentsOfFile: tmpPath, encoding: .utf8)
+            DispatchQueue.main.async { completion(result) }
+        }
     }
 }
 
@@ -78,21 +151,56 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
             let success = bridge.run(code)
             result(success)
 
+        case "pythonVersion":
+            bridge.runWithResult("__import__('sys').version") { version in
+                result(version ?? "Unknown")
+            }
+
+        case "authStatus":
+            bridge.runWithResult("tiddl_bridge.get_auth_status()") { response in
+                result(response)
+            }
+
+        case "startAuth":
+            bridge.runWithResult("tiddl_bridge.start_device_auth()") { response in
+                result(response)
+            }
+
+        case "checkAuth":
+            guard let args = call.arguments as? [String: Any],
+                  let deviceCode = args["deviceCode"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'deviceCode'", details: nil))
+                return
+            }
+            bridge.runWithResult("tiddl_bridge.check_auth_token('\(deviceCode)')") { response in
+                result(response)
+            }
+
+        case "refreshAuth":
+            bridge.runWithResult("tiddl_bridge.refresh_auth()") { response in
+                result(response)
+            }
+
+        case "getTrackInfo":
+            guard let args = call.arguments as? [String: Any],
+                  let url = args["url"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'url'", details: nil))
+                return
+            }
+            bridge.runWithResult("tiddl_bridge.get_track_info('\(url)')") { response in
+                result(response)
+            }
+
         case "download":
             guard let args = call.arguments as? [String: Any],
                   let url = args["url"] as? String else {
-                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'url' argument", details: nil))
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'url'", details: nil))
                 return
             }
-            // TODO: Phase 3 — call tiddl download via Python bridge
-            result(FlutterError(code: "NOT_IMPLEMENTED", message: "Tiddl download not yet implemented", details: nil))
-
-        case "pythonVersion":
-            let success = bridge.run("""
-                import sys
-                print(f"Python {sys.version}")
-            """)
-            result(success ? "OK" : "Failed")
+            let quality = (args["quality"] as? String) ?? "LOSSLESS"
+            bridge.runWithResult("tiddl_bridge.download_track('\(url)', '\(quality)')") { response in
+                result(response)
+            }
 
         default:
             result(FlutterMethodNotImplemented)

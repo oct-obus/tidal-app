@@ -35,56 +35,9 @@ bridge_ref = runner_group.new_file('PythonBridge.swift')
 target.source_build_phase.add_file_reference(bridge_ref)
 
 # --- Add Run Script build phase for Python stdlib installation ---
-
-install_script = <<~SCRIPT
-  set -e
-
-  # Determine the right slice for the target platform
-  if [ "$EFFECTIVE_PLATFORM_NAME" = "-iphonesimulator" ]; then
-    SLICE_FOLDER="ios-arm64_x86_64-simulator"
-  else
-    SLICE_FOLDER="ios-arm64"
-  fi
-
-  PYTHON_FW="$PROJECT_DIR/Python.xcframework"
-  DEST="$CODESIGNING_FOLDER_PATH/python/lib"
-  mkdir -p "$DEST"
-
-  # Copy shared stdlib (pure Python modules)
-  if [ -d "$PYTHON_FW/lib" ]; then
-    rsync -au "$PYTHON_FW/lib/" "$DEST/"
-    # Copy arch-specific stdlib additions
-    if [ -d "$PYTHON_FW/$SLICE_FOLDER/lib-$ARCHS" ]; then
-      rsync -au "$PYTHON_FW/$SLICE_FOLDER/lib-$ARCHS/" "$DEST/"
-    fi
-  else
-    rsync -au "$PYTHON_FW/$SLICE_FOLDER/lib/" "$DEST/" --exclude 'libpython*.dylib'
-  fi
-
-  # Remove .so files for unsigned builds (can't do framework conversion without signing)
-  find "$DEST" -name "*.so" -delete
-
-  # Copy app code and packages
-  if [ -d "$PROJECT_DIR/Runner/python/app" ]; then
-    mkdir -p "$CODESIGNING_FOLDER_PATH/python/app"
-    rsync -au "$PROJECT_DIR/Runner/python/app/" "$CODESIGNING_FOLDER_PATH/python/app/"
-  fi
-  if [ -d "$PROJECT_DIR/Runner/python/app_packages" ]; then
-    mkdir -p "$CODESIGNING_FOLDER_PATH/python/app_packages"
-    rsync -au "$PROJECT_DIR/Runner/python/app_packages/" "$CODESIGNING_FOLDER_PATH/python/app_packages/"
-  fi
-
-  echo "Python stdlib installed (pure Python only, no C extensions)"
-SCRIPT
-
-script_phase = project.new(Xcodeproj::Project::Object::PBXShellScriptBuildPhase)
-script_phase.name = 'Install Python Standard Library'
-script_phase.shell_script = install_script
-script_phase.shell_path = '/bin/sh'
-
-# Insert before "Embed Frameworks" so stdlib is ready before signing
-embed_idx = target.build_phases.index(embed_phase) || target.build_phases.length
-target.build_phases.insert(embed_idx, script_phase)
+# NOTE: Stdlib installation is now done post-build by scripts/post_build.sh
+# The Xcode build phase is no longer needed for this.
+# We only keep the app code/packages copy for the build to reference.
 
 # --- Add header search path for Python headers ---
 

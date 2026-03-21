@@ -27,3 +27,4 @@ android/local.properties
 __pycache__/
 *.pyc
 output/
+TidalApp*.ipa

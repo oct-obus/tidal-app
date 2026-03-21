@@ -35,15 +35,13 @@ jobs:
           tar xzf python-ios.tar.gz -C ios/PythonSupport
 
       - name: Place Python.xcframework
-        run: |
-          mv ios/PythonSupport/Python.xcframework ios/Python.xcframework
+        run: mv ios/PythonSupport/Python.xcframework ios/Python.xcframework
 
       - name: Copy Python bridge into project
         run: cp scripts/PythonBridge.swift ios/Runner/PythonBridge.swift
 
       - name: Register plugin in AppDelegate
         run: |
-          # Add PythonBridgePlugin registration to the Flutter-generated AppDelegate
           sed -i '' 's/GeneratedPluginRegistrant.register(with: self)/GeneratedPluginRegistrant.register(with: self)\n    PythonBridgePlugin.register(with: self.registrar(forPlugin: "PythonBridgePlugin")!)/' ios/Runner/AppDelegate.swift
 
       - name: Install xcodeproj gem
@@ -56,12 +54,52 @@ jobs:
         run: |
           mkdir -p ios/Runner/python/app
           mkdir -p ios/Runner/python/app_packages
-          echo "print('Hello from embedded Python!')" > ios/Runner/python/app/__init__.py
+
+      # --- Install tiddl + dependencies ---
+
+      - name: Install Python packages
+        run: |
+          python3 -m pip install --upgrade pip
+          # Install tiddl and all deps to a target directory
+          pip3 install tiddl --target=python_packages_built --no-compile
+          # Install certifi for SSL certs
+          pip3 install certifi --target=python_packages_built --no-compile
+          echo "Installed packages:"
+          ls python_packages_built/
+
+      - name: Clean packages for iOS
+        run: |
+          cd python_packages_built
+          # Remove macOS-only .so/.dylib files (wrong architecture)
+          find . -name "*.so" -delete
+          find . -name "*.dylib" -delete
+          # Remove dist-info to save space
+          find . -name "*.dist-info" -type d -exec rm -rf {} + 2>/dev/null || true
+          # Remove __pycache__
+          find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+          # Remove tests
+          find . -name "tests" -type d -exec rm -rf {} + 2>/dev/null || true
+          find . -name "test" -type d -exec rm -rf {} + 2>/dev/null || true
+          # Remove pydantic and pydantic_core (we use our own shim)
+          rm -rf pydantic pydantic_core
+          # Remove ffmpeg_asyncio (we use our own shim)
+          rm -rf ffmpeg_asyncio
+          cd ..
+          echo "Cleaned packages size: $(du -sh python_packages_built | cut -f1)"
 
       # --- Build ---
 
       - name: Build iOS (no codesign)
         run: flutter build ios --release --no-codesign
+
+      # --- Post-build: Install Python into app bundle ---
+
+      - name: Install Python into app bundle
+        run: |
+          chmod +x scripts/post_build.sh
+          bash scripts/post_build.sh \
+            build/ios/iphoneos/Runner.app \
+            ios/Python.xcframework
 
       - name: Package IPA
         working-directory: build/ios/iphoneos
