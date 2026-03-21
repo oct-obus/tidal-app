@@ -23,6 +23,9 @@ func PyGILState_Ensure() -> Int32
 @_silgen_name("PyGILState_Release")
 func PyGILState_Release(_ state: Int32)
 
+@_silgen_name("PyEval_SaveThread")
+func PyEval_SaveThread() -> OpaquePointer?
+
 class PythonBridge: NSObject {
     static let shared = PythonBridge()
     private var isInitialized = false
@@ -38,6 +41,9 @@ class PythonBridge: NSObject {
         let appPath = "\(resourcePath)/python/app"
         let appPackages = "\(resourcePath)/python/app_packages"
         let pythonPath = "\(libPath):\(dynloadPath):\(appPath):\(appPackages)"
+
+        NSLog("PythonBridge: PYTHONHOME = %@", pythonHome)
+        NSLog("PythonBridge: PYTHONPATH = %@", pythonPath)
 
         _ = c_setenv("PYTHONHOME", pythonHome, 1)
         _ = c_setenv("PYTHONPATH", pythonPath, 1)
@@ -55,7 +61,6 @@ class PythonBridge: NSObject {
 
         if isInitialized {
             NSLog("PythonBridge: Python initialized successfully")
-            // Set up the tiddl bridge with documents path
             let initCode = """
             import sys
             sys.path.insert(0, '\(appPackages)')
@@ -70,6 +75,9 @@ class PythonBridge: NSObject {
                 traceback.print_exc()
             """
             PyRun_SimpleString(initCode)
+
+            // Release the GIL so background threads can acquire it
+            _ = PyEval_SaveThread()
         } else {
             NSLog("PythonBridge: Failed to initialize Python")
         }

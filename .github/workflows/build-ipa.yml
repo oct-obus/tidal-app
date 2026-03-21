@@ -42,7 +42,24 @@ jobs:
 
       - name: Register plugin in AppDelegate
         run: |
-          sed -i '' 's/GeneratedPluginRegistrant.register(with: self)/GeneratedPluginRegistrant.register(with: self)\n    PythonBridgePlugin.register(with: self.registrar(forPlugin: "PythonBridgePlugin")!)/' ios/Runner/AppDelegate.swift
+          cat > ios/Runner/AppDelegate.swift << 'SWIFT'
+          import Flutter
+          import UIKit
+
+          @main
+          @objc class AppDelegate: FlutterAppDelegate {
+            override func application(
+              _ application: UIApplication,
+              didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+            ) -> Bool {
+              GeneratedPluginRegistrant.register(with: self)
+              PythonBridgePlugin.register(with: self.registrar(forPlugin: "PythonBridgePlugin")!)
+              return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+            }
+          }
+          SWIFT
+          echo "AppDelegate.swift written:"
+          cat ios/Runner/AppDelegate.swift
 
       - name: Install xcodeproj gem
         run: gem install xcodeproj --no-document
@@ -107,6 +124,22 @@ jobs:
           mkdir Payload
           mv Runner.app Payload/
           zip -qq -r -9 TidalApp.ipa Payload
+
+      - name: Verify IPA contents
+        working-directory: build/ios/iphoneos
+        run: |
+          echo "=== Verify Python bundle ==="
+          ls -la Payload/Runner.app/python/ || echo "WARN: No python dir!"
+          echo "--- stdlib ---"
+          ls Payload/Runner.app/python/lib/ 2>/dev/null | head -5
+          echo "--- app code ---"
+          ls Payload/Runner.app/python/app/ 2>/dev/null
+          echo "--- app packages ---"
+          ls Payload/Runner.app/python/app_packages/ 2>/dev/null | head -20
+          echo "--- frameworks (sample) ---"
+          ls Payload/Runner.app/Frameworks/ 2>/dev/null | head -10
+          echo "--- IPA size ---"
+          du -sh TidalApp.ipa
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
