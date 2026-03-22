@@ -357,10 +357,16 @@ def list_downloads():
 
 
 def delete_download(file_path):
-    """Delete a downloaded song."""
+    """Delete a downloaded song (path must be within downloads dir)."""
     try:
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        if not DOCUMENTS_DIR:
+            return _result(False, error="Documents directory not set")
+        download_dir = os.path.realpath(os.path.join(DOCUMENTS_DIR, "downloads"))
+        resolved = os.path.realpath(file_path)
+        if not resolved.startswith(download_dir + os.sep):
+            return _result(False, error="Invalid file path")
+        if os.path.exists(resolved):
+            os.remove(resolved)
         return _result(True, {"deleted": True})
     except Exception as e:
         logger.error(f"Delete error: {e}")
