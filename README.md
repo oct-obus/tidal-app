@@ -49,4 +49,10 @@ Requires no local Xcode/Flutter setup - everything runs on GitHub Actions macOS 
 
 ## Sideloading
 
-The app produces an unsigned IPA. Install via [LiveContainer](https://github.com/khanhduytran0/LiveContainer) on a jailbroken/sideloaded iOS device.
+The app produces an unsigned IPA. Install using any sideloading method:
+- [AltStore](https://altstore.io/) - free, re-signs every 7 days
+- [LiveContainer](https://github.com/khanhduytran0/LiveContainer) - runs apps inside a container without re-signing
+- [TrollStore](https://github.com/opa334/TrollStore) - permanent install, requires compatible iOS version
+- Other signing tools (Sideloadly, etc.)
+
+No jailbreak required.
