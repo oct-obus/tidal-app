@@ -7,6 +7,7 @@ class PlaybackManager extends ChangeNotifier {
   final durationNotifier = ValueNotifier<double>(0);
 
   bool isPlaying = false;
+  bool isSeeking = false;
   String? currentFilePath;
   String? trackTitle;
   String? trackArtist;
@@ -36,7 +37,7 @@ class PlaybackManager extends ChangeNotifier {
           final newDur = (state['duration'] as num?)?.toDouble() ?? 0;
           final newPlaying = state['isPlaying'] == true;
 
-          positionNotifier.value = newPos;
+          if (!isSeeking) positionNotifier.value = newPos;
           durationNotifier.value = newDur;
 
           if (newPlaying != isPlaying) {

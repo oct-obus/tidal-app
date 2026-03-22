@@ -456,7 +456,18 @@ class _HomePageState extends State<HomePage> {
                   child: Slider(
                     value: dur > 0 ? pos.clamp(0, dur) : 0,
                     max: dur > 0 ? dur : 1,
-                    onChanged: dur > 0 ? (v) => _playback.seekTo(v) : null,
+                    onChangeStart: dur > 0
+                        ? (_) => _playback.isSeeking = true
+                        : null,
+                    onChanged: dur > 0
+                        ? (v) => _playback.positionNotifier.value = v
+                        : null,
+                    onChangeEnd: dur > 0
+                        ? (v) {
+                            _playback.seekTo(v);
+                            _playback.isSeeking = false;
+                          }
+                        : null,
                   ),
                 ),
               ),
