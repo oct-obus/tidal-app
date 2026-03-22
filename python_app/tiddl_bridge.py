@@ -332,6 +332,41 @@ def download_track(url_or_id, quality="LOSSLESS"):
         return _result(False, error=str(e))
 
 
+def list_downloads():
+    """List all downloaded songs in the downloads directory."""
+    try:
+        if not DOCUMENTS_DIR:
+            return _result(True, {"songs": []})
+        download_dir = os.path.join(DOCUMENTS_DIR, "downloads")
+        if not os.path.exists(download_dir):
+            return _result(True, {"songs": []})
+        songs = []
+        for fname in sorted(os.listdir(download_dir)):
+            fpath = os.path.join(download_dir, fname)
+            if os.path.isfile(fpath) and not fname.startswith('.'):
+                size_mb = os.path.getsize(fpath) / (1024 * 1024)
+                songs.append({
+                    "fileName": fname,
+                    "filePath": fpath,
+                    "sizeMB": round(size_mb, 1),
+                })
+        return _result(True, {"songs": songs})
+    except Exception as e:
+        logger.error(f"List downloads error: {e}")
+        return _result(False, error=str(e))
+
+
+def delete_download(file_path):
+    """Delete a downloaded song."""
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        return _result(True, {"deleted": True})
+    except Exception as e:
+        logger.error(f"Delete error: {e}")
+        return _result(False, error=str(e))
+
+
 if __name__ == "__main__":
     print("tiddl_bridge loaded successfully")
     print(f"Python {sys.version}")

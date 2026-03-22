@@ -2,18 +2,9 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:just_audio/just_audio.dart';
-import 'package:just_audio_background/just_audio_background.dart';
-import 'package:audio_service/audio_service.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await JustAudioBackground.init(
-    androidNotificationChannelId: 'com.obus.tidal_app.audio',
-    androidNotificationChannelName: 'Audio playback',
-    androidNotificationOngoing: true,
-  );
+void main() {
   runApp(const TidalApp());
 }
 
@@ -44,9 +35,9 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   static const _channel = MethodChannel('com.obus.tidal_app/python');
+  static const _audioChannel = MethodChannel('com.obus.tidal_app/audio');
 
   final _urlController = TextEditingController();
-  final _player = AudioPlayer();
 
   String _status = 'Initializing...';
   bool _isAuthenticated = false;
@@ -54,21 +45,23 @@ class _HomePageState extends State<HomePage> {
   bool _isAuthenticating = false;
   bool _isPlaying = false;
   String? _currentFilePath;
-  String? _downloadedPath;
   String? _trackTitle;
   String? _trackArtist;
   String? _trackAlbum;
   String? _pythonVersion;
   String _downloadStep = '';
-  double _playbackSpeed = 1.0;
   double _downloadProgress = 0;
-  Timer? _progressTimer;
+  double _playbackSpeed = 1.0;
+  double _position = 0;
+  double _duration = 0;
+  List<Map<String, dynamic>> _library = [];
 
-  // Auth flow state
   String? _authUserCode;
   String? _authVerifyUrl;
   String? _authDeviceCode;
   Timer? _authPollTimer;
+  Timer? _progressTimer;
+  Timer? _playerStateTimer;
   int _authPollInterval = 5;
   DateTime? _lastPollTime;
 
@@ -77,30 +70,47 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _listenToPlayerState();
+    _setupAudioCallbacks();
     _initPython();
   }
 
-  void _listenToPlayerState() {
-    _player.playerStateStream.listen((state) {
-      final playing = state.playing;
-      final completed = state.processingState == ProcessingState.completed;
-      setState(() {
-        _isPlaying = playing && !completed;
-      });
-      if (completed) {
-        _player.seek(Duration.zero);
-        _player.pause();
+  void _setupAudioCallbacks() {
+    _audioChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onPlaybackComplete') {
+        setState(() => _isPlaying = false);
       }
     });
+  }
+
+  void _startPlayerStatePolling() {
+    _playerStateTimer?.cancel();
+    _playerStateTimer =
+        Timer.periodic(const Duration(milliseconds: 500), (_) async {
+      try {
+        final state =
+            await _audioChannel.invokeMapMethod<String, dynamic>('getState');
+        if (state != null && mounted) {
+          setState(() {
+            _isPlaying = state['isPlaying'] == true;
+            _position = (state['position'] as num?)?.toDouble() ?? 0;
+            _duration = (state['duration'] as num?)?.toDouble() ?? 0;
+          });
+        }
+      } catch (_) {}
+    });
+  }
+
+  void _stopPlayerStatePolling() {
+    _playerStateTimer?.cancel();
+    _playerStateTimer = null;
   }
 
   @override
   void dispose() {
     _urlController.dispose();
-    _player.dispose();
     _authPollTimer?.cancel();
     _progressTimer?.cancel();
+    _playerStateTimer?.cancel();
     super.dispose();
   }
 
@@ -117,6 +127,7 @@ class _HomePageState extends State<HomePage> {
             _isAuthenticated = data['data']?['authenticated'] == true;
             _status = _isAuthenticated ? 'Ready' : 'Not logged in';
           });
+          if (_isAuthenticated) _loadLibrary();
         }
       }
     } on MissingPluginException {
@@ -128,18 +139,22 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _openAuthUrl(String url) async {
     final uri = Uri.parse(url);
+    bool opened = false;
     try {
-      await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
-    } catch (_) {
+      opened = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
+    } catch (_) {}
+    if (!opened) {
       try {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Could not open URL: $e')),
-          );
-        }
-      }
+        opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } catch (_) {}
+    }
+    if (!opened && mounted) {
+      await Clipboard.setData(ClipboardData(text: url));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content:
+                Text('Could not open browser. Link copied to clipboard.')),
+      );
     }
   }
 
@@ -158,12 +173,11 @@ class _HomePageState extends State<HomePage> {
         });
         return;
       }
-
       final data = jsonDecode(response);
       if (data['success'] != true) {
         setState(() {
           _isAuthenticating = false;
-          _status = 'Auth failed: ${data['error']}';
+          _status = 'Auth failed: ${data["error"]}';
         });
         return;
       }
@@ -177,9 +191,7 @@ class _HomePageState extends State<HomePage> {
         _status = 'Enter code: $_authUserCode';
       });
 
-      if (_authVerifyUrl != null) {
-        await _openAuthUrl(_authVerifyUrl!);
-      }
+      if (_authVerifyUrl != null) await _openAuthUrl(_authVerifyUrl!);
 
       _lastPollTime = DateTime.now();
       _authPollTimer = Timer.periodic(
@@ -196,7 +208,6 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _pollAuth() async {
     if (_authDeviceCode == null) return;
-
     final now = DateTime.now();
     if (_lastPollTime != null &&
         now.difference(_lastPollTime!).inSeconds < _authPollInterval) {
@@ -206,11 +217,8 @@ class _HomePageState extends State<HomePage> {
 
     try {
       final response = await _channel.invokeMethod<String>(
-        'checkAuth',
-        {'deviceCode': _authDeviceCode},
-      );
+          'checkAuth', {'deviceCode': _authDeviceCode});
       if (response == null) return;
-
       final data = jsonDecode(response);
       if (data['success'] == true) {
         _authPollTimer?.cancel();
@@ -222,16 +230,15 @@ class _HomePageState extends State<HomePage> {
           _authDeviceCode = null;
           _status = 'Logged in!';
         });
+        _loadLibrary();
       } else if (data['error'] != 'pending') {
         _authPollTimer?.cancel();
         setState(() {
           _isAuthenticating = false;
-          _status = 'Auth failed: ${data['error']}';
+          _status = 'Auth failed: ${data["error"]}';
         });
       }
-    } catch (e) {
-      // Keep polling
-    }
+    } catch (_) {}
   }
 
   Future<void> _logout() async {
@@ -239,10 +246,15 @@ class _HomePageState extends State<HomePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Log out'),
-        content: const Text('This will clear your Tidal credentials. Continue?'),
+        content:
+            const Text('This will clear your Tidal credentials. Continue?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Log out')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Log out')),
         ],
       ),
     );
@@ -250,15 +262,16 @@ class _HomePageState extends State<HomePage> {
 
     try {
       await _channel.invokeMethod<String>('logout');
-      await _player.stop();
+      await _audioChannel.invokeMethod('stop');
+      _stopPlayerStatePolling();
       setState(() {
         _isAuthenticated = false;
         _isPlaying = false;
-        _downloadedPath = null;
         _currentFilePath = null;
         _trackTitle = null;
         _trackArtist = null;
         _trackAlbum = null;
+        _library = [];
         _status = 'Logged out';
       });
     } catch (e) {
@@ -266,24 +279,25 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // --- Download ---
+
   void _startProgressPolling() {
     _progressTimer?.cancel();
-    _progressTimer = Timer.periodic(const Duration(milliseconds: 500), (_) async {
+    _progressTimer =
+        Timer.periodic(const Duration(milliseconds: 500), (_) async {
       try {
-        final response = await _channel.invokeMethod<String>('downloadProgress');
+        final response =
+            await _channel.invokeMethod<String>('downloadProgress');
         if (response == null) return;
         final data = jsonDecode(response);
         if (data['success'] == true) {
           final p = data['data'];
-          final step = p['step'] as String? ?? 'idle';
           final pct = (p['pct'] as num?)?.toDouble() ?? 0;
           final detail = p['detail'] as String? ?? '';
-          if (step != 'idle') {
-            setState(() {
-              _downloadProgress = pct / 100.0;
-              _downloadStep = detail.isNotEmpty ? detail : step;
-            });
-          }
+          setState(() {
+            _downloadProgress = pct / 100.0;
+            if (detail.isNotEmpty) _downloadStep = detail;
+          });
         }
       } catch (_) {}
     });
@@ -302,32 +316,29 @@ class _HomePageState extends State<HomePage> {
       _isDownloading = true;
       _downloadStep = 'Starting...';
       _downloadProgress = 0;
-      _status = 'Starting download...';
     });
-
     _startProgressPolling();
 
     try {
-      final response = await _channel.invokeMethod<String>('download', {'url': url});
+      final response =
+          await _channel.invokeMethod<String>('download', {'url': url});
       if (response == null) {
         setState(() => _status = 'Download failed: no response');
         return;
       }
-
       final data = jsonDecode(response);
       if (data['success'] == true) {
         final dl = data['data'];
         setState(() {
-          _downloadStep = '';
           _downloadProgress = 1.0;
-          _status = 'Downloaded: ${dl['title']}';
-          _downloadedPath = dl['filePath'];
+          _status = 'Downloaded: ${dl["title"]}';
           _trackTitle = dl['title'];
           _trackArtist = dl['artist'];
           _trackAlbum = dl['album'];
         });
+        _loadLibrary();
       } else {
-        setState(() => _status = 'Error: ${data['error']}');
+        setState(() => _status = 'Error: ${data["error"]}');
       }
     } on PlatformException catch (e) {
       setState(() => _status = 'Error: ${e.message}');
@@ -342,269 +353,499 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<void> _togglePlayback() async {
-    if (_downloadedPath == null) return;
+  // --- Audio Playback (native AVPlayer with varispeed) ---
 
+  Future<void> _playSong(String filePath,
+      {String? title, String? artist, String? album}) async {
+    try {
+      await _audioChannel.invokeMethod('play', {
+        'filePath': filePath,
+        'speed': _playbackSpeed,
+        'title': title ?? _parseFileName(filePath),
+        'artist': artist ?? '',
+        'album': album ?? '',
+      });
+      setState(() {
+        _currentFilePath = filePath;
+        _trackTitle = title ?? _parseFileName(filePath);
+        _trackArtist = artist;
+        _trackAlbum = album;
+        _isPlaying = true;
+      });
+      _startPlayerStatePolling();
+    } catch (e) {
+      setState(() => _status = 'Playback error: $e');
+    }
+  }
+
+  String _parseFileName(String path) {
+    final name = path.split('/').last;
+    final dot = name.lastIndexOf('.');
+    return dot > 0 ? name.substring(0, dot) : name;
+  }
+
+  Future<void> _togglePlayback() async {
     if (_isPlaying) {
-      await _player.pause();
-    } else {
-      if (_currentFilePath != _downloadedPath) {
-        await _player.setAudioSource(
-          AudioSource.file(
-            _downloadedPath!,
-            tag: MediaItem(
-              id: _downloadedPath!,
-              title: _trackTitle ?? 'Unknown',
-              artist: _trackArtist ?? 'Unknown',
-              album: _trackAlbum ?? '',
-            ),
-          ),
-        );
-        _currentFilePath = _downloadedPath;
-      }
-      await _player.play();
+      await _audioChannel.invokeMethod('pause');
+      setState(() => _isPlaying = false);
+    } else if (_currentFilePath != null) {
+      await _audioChannel.invokeMethod('resume');
+      setState(() => _isPlaying = true);
+      _startPlayerStatePolling();
     }
   }
 
   Future<void> _setSpeed(double speed) async {
-    await _player.setSpeed(speed);
-    setState(() => _playbackSpeed = speed);
+    try {
+      await _audioChannel.invokeMethod('setSpeed', {'speed': speed});
+      setState(() => _playbackSpeed = speed);
+    } catch (_) {}
   }
+
+  Future<void> _seekTo(double seconds) async {
+    try {
+      await _audioChannel.invokeMethod('seek', {'position': seconds});
+    } catch (_) {}
+  }
+
+  // --- Library ---
+
+  Future<void> _loadLibrary() async {
+    try {
+      final response = await _channel.invokeMethod<String>('listDownloads');
+      if (response == null) return;
+      final data = jsonDecode(response);
+      if (data['success'] == true) {
+        final songs =
+            (data['data']['songs'] as List).cast<Map<String, dynamic>>();
+        setState(() => _library = songs);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _deleteSong(String filePath) async {
+    try {
+      await _channel
+          .invokeMethod<String>('deleteDownload', {'filePath': filePath});
+      if (_currentFilePath == filePath) {
+        await _audioChannel.invokeMethod('stop');
+        _stopPlayerStatePolling();
+        setState(() {
+          _isPlaying = false;
+          _currentFilePath = null;
+        });
+      }
+      _loadLibrary();
+    } catch (_) {}
+  }
+
+  // --- UI ---
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Tidal Downloader'),
         centerTitle: true,
         actions: [
-          if (_isAuthenticated) ...[
+          if (_isAuthenticated)
             IconButton(
-              icon: const Icon(Icons.logout),
-              onPressed: _logout,
-              tooltip: 'Log out',
-            ),
-          ] else
+                icon: const Icon(Icons.logout),
+                onPressed: _logout,
+                tooltip: 'Log out')
+          else
             IconButton(
-              icon: const Icon(Icons.login),
-              onPressed: _isAuthenticating ? null : _startAuth,
-              tooltip: 'Log in to Tidal',
-            ),
+                icon: const Icon(Icons.login),
+                onPressed: _isAuthenticating ? null : _startAuth,
+                tooltip: 'Log in'),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Auth card (shown when not authenticated)
-            if (!_isAuthenticated) ...[
-              Card(
-                color: theme.colorScheme.errorContainer.withOpacity(0.3),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    children: [
-                      Icon(Icons.lock_outline, color: theme.colorScheme.error),
-                      const SizedBox(height: 8),
-                      Text(
-                        _authUserCode != null
-                            ? 'Open the link and enter this code:'
-                            : 'Log in to Tidal to download music',
-                        style: theme.textTheme.bodyMedium,
-                        textAlign: TextAlign.center,
-                      ),
-                      if (_authUserCode != null) ...[
-                        const SizedBox(height: 8),
-                        SelectableText(
-                          _authUserCode!,
-                          style: theme.textTheme.headlineMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 4,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        if (_authVerifyUrl != null)
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              TextButton.icon(
-                                onPressed: () => _openAuthUrl(_authVerifyUrl!),
-                                icon: const Icon(Icons.open_in_browser, size: 16),
-                                label: const Text('Open login page'),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.copy, size: 16),
-                                tooltip: 'Copy link',
-                                onPressed: () {
-                                  Clipboard.setData(ClipboardData(text: _authVerifyUrl!));
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Link copied!')),
-                                  );
-                                },
-                              ),
-                            ],
-                          ),
-                        const SizedBox(height: 8),
-                        const CircularProgressIndicator(strokeWidth: 2),
-                        const SizedBox(height: 4),
-                        Text('Waiting for authorization...',
-                            style: theme.textTheme.bodySmall),
-                      ] else ...[
-                        const SizedBox(height: 12),
-                        FilledButton.icon(
-                          onPressed: _isAuthenticating ? null : _startAuth,
-                          icon: const Icon(Icons.login),
-                          label: const Text('Log in to Tidal'),
-                        ),
-                      ],
-                    ],
+      body: Column(
+        children: [
+          Expanded(
+            child: _isAuthenticated
+                ? _buildMainContent(theme)
+                : _buildAuthContent(theme),
+          ),
+          if (_currentFilePath != null) _buildNowPlayingBar(theme),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAuthContent(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Card(
+            color: theme.colorScheme.errorContainer.withOpacity(0.3),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  Icon(Icons.lock_outline,
+                      color: theme.colorScheme.error, size: 48),
+                  const SizedBox(height: 12),
+                  Text(
+                    _authUserCode != null
+                        ? 'Enter this code on Tidal:'
+                        : 'Log in to Tidal to get started',
+                    style: theme.textTheme.bodyLarge,
+                    textAlign: TextAlign.center,
                   ),
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
-            // URL input
-            TextField(
-              controller: _urlController,
-              enabled: _isAuthenticated && !_isDownloading,
-              decoration: InputDecoration(
-                labelText: 'Tidal URL',
-                hintText: 'https://tidal.com/browse/track/...',
-                border: const OutlineInputBorder(),
-                prefixIcon: const Icon(Icons.link),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.paste),
-                  onPressed: (_isAuthenticated && !_isDownloading)
-                      ? () async {
-                          final data = await Clipboard.getData('text/plain');
-                          if (data?.text != null) {
-                            _urlController.text = data!.text!;
-                          }
-                        }
-                      : null,
-                ),
-              ),
-              keyboardType: TextInputType.url,
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: (_isDownloading || !_isAuthenticated) ? null : _download,
-              icon: _isDownloading
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.download),
-              label: Text(_isDownloading ? 'Downloading...' : 'Download'),
-            ),
-            if (_isDownloading) ...[
-              const SizedBox(height: 8),
-              LinearProgressIndicator(value: _downloadProgress > 0 ? _downloadProgress : null),
-              const SizedBox(height: 4),
-              Text(
-                _downloadStep,
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
-                textAlign: TextAlign.center,
-              ),
-            ],
-            const SizedBox(height: 24),
-            // Status / Player card
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          _downloadedPath != null
-                              ? Icons.check_circle
-                              : Icons.info_outline,
-                          color: _downloadedPath != null
-                              ? Colors.green
-                              : theme.colorScheme.primary,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _status,
-                                style: theme.textTheme.bodyLarge,
-                              ),
-                              if (_trackArtist != null && _trackTitle != null)
-                                Text(
-                                  '$_trackArtist — $_trackTitle',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.outline,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (_downloadedPath != null) ...[
-                      const SizedBox(height: 16),
-                      // Play/pause button
-                      FilledButton.tonalIcon(
-                        onPressed: _togglePlayback,
-                        icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
-                        label: Text(_isPlaying ? 'Pause' : 'Play'),
-                      ),
-                      const SizedBox(height: 16),
-                      // Speed control
-                      Row(
+                  if (_authUserCode != null) ...[
+                    const SizedBox(height: 12),
+                    SelectableText(_authUserCode!,
+                        style: theme.textTheme.headlineLarge?.copyWith(
+                            fontWeight: FontWeight.bold, letterSpacing: 4)),
+                    const SizedBox(height: 12),
+                    if (_authVerifyUrl != null)
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 8,
                         children: [
-                          const Icon(Icons.speed, size: 18),
-                          const SizedBox(width: 8),
-                          Text('${(_playbackSpeed * 100).round()}%',
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              )),
-                          Expanded(
-                            child: Slider(
-                              value: _playbackSpeed,
-                              min: 0.5,
-                              max: 2.0,
-                              divisions: 30,
-                              label: '${(_playbackSpeed * 100).round()}%',
-                              onChanged: (v) => _setSpeed(v),
-                            ),
+                          TextButton.icon(
+                            onPressed: () => _openAuthUrl(_authVerifyUrl!),
+                            icon:
+                                const Icon(Icons.open_in_browser, size: 16),
+                            label: const Text('Open login page'),
+                          ),
+                          TextButton.icon(
+                            onPressed: () {
+                              Clipboard.setData(
+                                  ClipboardData(text: _authVerifyUrl!));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                      content: Text('Link copied!')));
+                            },
+                            icon: const Icon(Icons.copy, size: 16),
+                            label: const Text('Copy link'),
                           ),
                         ],
                       ),
-                      // Speed presets
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: _speedPresets.map((speed) {
-                          final isActive = (_playbackSpeed - speed).abs() < 0.01;
-                          return FilterChip(
-                            label: Text('${(speed * 100).round()}%'),
-                            selected: isActive,
-                            onSelected: (_) => _setSpeed(speed),
-                            visualDensity: VisualDensity.compact,
-                          );
-                        }).toList(),
-                      ),
-                    ],
+                    const SizedBox(height: 12),
+                    const CircularProgressIndicator(strokeWidth: 2),
+                    const SizedBox(height: 4),
+                    Text('Waiting for authorization...',
+                        style: theme.textTheme.bodySmall),
+                  ] else ...[
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      onPressed: _isAuthenticating ? null : _startAuth,
+                      icon: const Icon(Icons.login),
+                      label: const Text('Log in to Tidal'),
+                    ),
                   ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Powered by tiddl + CPython${_pythonVersion != null ? " $_pythonVersion" : ""}',
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.outline),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMainContent(ThemeData theme) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _urlController,
+                  enabled: !_isDownloading,
+                  decoration: InputDecoration(
+                    labelText: 'Tidal URL',
+                    hintText: 'https://tidal.com/browse/track/...',
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.link),
+                    isDense: true,
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.paste, size: 20),
+                      onPressed: _isDownloading
+                          ? null
+                          : () async {
+                              final data =
+                                  await Clipboard.getData('text/plain');
+                              if (data?.text != null) {
+                                _urlController.text = data!.text!;
+                              }
+                            },
+                    ),
+                  ),
+                  keyboardType: TextInputType.url,
+                  onSubmitted: (_) => _download(),
                 ),
               ),
-            ),
-            const Spacer(),
-            Text(
-              'Powered by tiddl + embedded CPython${_pythonVersion != null ? ' $_pythonVersion' : ''}',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.outline,
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed:
+                    (_isDownloading || _urlController.text.trim().isEmpty)
+                        ? null
+                        : _download,
+                child: _isDownloading
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.download),
               ),
-              textAlign: TextAlign.center,
+            ],
+          ),
+        ),
+        if (_isDownloading) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Column(
+              children: [
+                LinearProgressIndicator(
+                    value:
+                        _downloadProgress > 0 ? _downloadProgress : null),
+                const SizedBox(height: 4),
+                Text(_downloadStep,
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.outline)),
+              ],
             ),
+          ),
+        ],
+        const SizedBox(height: 8),
+        Expanded(
+          child: _library.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.library_music,
+                          size: 64,
+                          color:
+                              theme.colorScheme.outline.withOpacity(0.3)),
+                      const SizedBox(height: 12),
+                      Text('No songs yet',
+                          style: theme.textTheme.bodyLarge
+                              ?.copyWith(color: theme.colorScheme.outline)),
+                      Text('Paste a Tidal URL above to download',
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: theme.colorScheme.outline)),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  itemCount: _library.length,
+                  itemBuilder: (ctx, i) {
+                    final song = _library[i];
+                    final filePath = song['filePath'] as String;
+                    final fileName = song['fileName'] as String;
+                    final sizeMB = song['sizeMB'] as num;
+                    final isActive = _currentFilePath == filePath;
+                    final displayName = fileName.contains('.')
+                        ? fileName.substring(0, fileName.lastIndexOf('.'))
+                        : fileName;
+
+                    return Dismissible(
+                      key: Key(filePath),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        color: Colors.red,
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 16),
+                        child:
+                            const Icon(Icons.delete, color: Colors.white),
+                      ),
+                      confirmDismiss: (_) async {
+                        return await showDialog<bool>(
+                          context: ctx,
+                          builder: (c) => AlertDialog(
+                            title: const Text('Delete song?'),
+                            content: Text('Delete "$displayName"?'),
+                            actions: [
+                              TextButton(
+                                  onPressed: () =>
+                                      Navigator.pop(c, false),
+                                  child: const Text('Cancel')),
+                              FilledButton(
+                                  onPressed: () =>
+                                      Navigator.pop(c, true),
+                                  child: const Text('Delete')),
+                            ],
+                          ),
+                        );
+                      },
+                      onDismissed: (_) => _deleteSong(filePath),
+                      child: ListTile(
+                        leading: Icon(
+                          isActive && _isPlaying
+                              ? Icons.equalizer
+                              : Icons.music_note,
+                          color:
+                              isActive ? theme.colorScheme.primary : null,
+                        ),
+                        title: Text(displayName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: isActive
+                                ? TextStyle(
+                                    color: theme.colorScheme.primary,
+                                    fontWeight: FontWeight.bold)
+                                : null),
+                        subtitle:
+                            Text('${sizeMB.toStringAsFixed(1)} MB'),
+                        onTap: () =>
+                            _playSong(filePath, title: displayName),
+                        dense: true,
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNowPlayingBar(ThemeData theme) {
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        boxShadow: [
+          BoxShadow(blurRadius: 8, color: Colors.black.withOpacity(0.3))
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_duration > 0)
+              SliderTheme(
+                data: const SliderThemeData(
+                  trackHeight: 2,
+                  thumbShape:
+                      RoundSliderThumbShape(enabledThumbRadius: 6),
+                  overlayShape:
+                      RoundSliderOverlayShape(overlayRadius: 12),
+                ),
+                child: Slider(
+                  value: _position.clamp(0, _duration),
+                  max: _duration > 0 ? _duration : 1,
+                  onChanged: (v) => _seekTo(v),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(_trackTitle ?? 'Unknown',
+                            style: theme.textTheme.bodyMedium
+                                ?.copyWith(fontWeight: FontWeight.bold),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                        if (_trackArtist != null &&
+                            _trackArtist!.isNotEmpty)
+                          Text(_trackArtist!,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.outline),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: Icon(
+                        _isPlaying
+                            ? Icons.pause_circle_filled
+                            : Icons.play_circle_filled,
+                        size: 40),
+                    onPressed: _togglePlayback,
+                  ),
+                  GestureDetector(
+                    onTap: () => _showSpeedSheet(theme),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                          '${(_playbackSpeed * 100).round()}%',
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showSpeedSheet(ThemeData theme) {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Playback Speed', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Text('${(_playbackSpeed * 100).round()}%',
+                style: theme.textTheme.headlineMedium
+                    ?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Text('Speed changes pitch (turntable style)',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.outline)),
+            const SizedBox(height: 16),
+            StatefulBuilder(
+              builder: (ctx, setSheetState) => Slider(
+                value: _playbackSpeed,
+                min: 0.5,
+                max: 2.0,
+                divisions: 30,
+                label: '${(_playbackSpeed * 100).round()}%',
+                onChanged: (v) {
+                  _setSpeed(v);
+                  setSheetState(() {});
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: _speedPresets.map((speed) {
+                final isActive =
+                    (_playbackSpeed - speed).abs() < 0.01;
+                return FilterChip(
+                  label: Text('${(speed * 100).round()}%'),
+                  selected: isActive,
+                  onSelected: (_) {
+                    _setSpeed(speed);
+                    Navigator.pop(ctx);
+                  },
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 16),
           ],
         ),
       ),

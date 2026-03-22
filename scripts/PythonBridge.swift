@@ -200,6 +200,22 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(response)
             }
 
+        case "listDownloads":
+            bridge.runWithResult("tiddl_bridge.list_downloads()") { response in
+                result(response)
+            }
+
+        case "deleteDownload":
+            guard let args = call.arguments as? [String: Any],
+                  let filePath = args["filePath"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'filePath'", details: nil))
+                return
+            }
+            let safePath = bridge.pythonEscape(filePath)
+            bridge.runWithResult("tiddl_bridge.delete_download('\(safePath)')") { response in
+                result(response)
+            }
+
         case "refreshAuth":
             bridge.runWithResult("tiddl_bridge.refresh_auth()") { response in
                 result(response)

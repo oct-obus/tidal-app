@@ -34,6 +34,11 @@ runner_group = project.main_group.find_subpath('Runner', true)
 bridge_ref = runner_group.new_file('PythonBridge.swift')
 target.source_build_phase.add_file_reference(bridge_ref)
 
+# --- Add AudioBridge.swift ---
+
+audio_ref = runner_group.new_file('AudioBridge.swift')
+target.source_build_phase.add_file_reference(audio_ref)
+
 # --- Add Run Script build phase for Python stdlib installation ---
 # NOTE: Stdlib installation is now done post-build by scripts/post_build.sh
 # The Xcode build phase is no longer needed for this.

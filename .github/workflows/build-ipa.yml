@@ -45,6 +45,7 @@ jobs:
       - name: Setup project for Python
         run: |
           cp scripts/PythonBridge.swift ios/Runner/PythonBridge.swift
+          cp scripts/AudioBridge.swift ios/Runner/AudioBridge.swift
           cat > ios/Runner/AppDelegate.swift << 'SWIFT'
           import Flutter
           import UIKit
@@ -57,6 +58,7 @@ jobs:
             ) -> Bool {
               GeneratedPluginRegistrant.register(with: self)
               PythonBridgePlugin.register(with: self.registrar(forPlugin: "PythonBridgePlugin")!)
+              AudioBridgePlugin.register(with: self.registrar(forPlugin: "AudioBridgePlugin")!)
               return super.application(application, didFinishLaunchingWithOptions: launchOptions)
             }
           }
@@ -206,6 +208,7 @@ jobs:
       - name: Setup project for Python
         run: |
           cp scripts/PythonBridge.swift ios/Runner/PythonBridge.swift
+          cp scripts/AudioBridge.swift ios/Runner/AudioBridge.swift
           cat > ios/Runner/AppDelegate.swift << 'SWIFT'
           import Flutter
           import UIKit
@@ -218,6 +221,7 @@ jobs:
             ) -> Bool {
               GeneratedPluginRegistrant.register(with: self)
               PythonBridgePlugin.register(with: self.registrar(forPlugin: "PythonBridgePlugin")!)
+              AudioBridgePlugin.register(with: self.registrar(forPlugin: "AudioBridgePlugin")!)
               return super.application(application, didFinishLaunchingWithOptions: launchOptions)
             }
           }
