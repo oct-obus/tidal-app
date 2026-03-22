@@ -419,6 +419,23 @@ class _HomePageState extends State<HomePage> {
                                     fontWeight: FontWeight.bold)
                                 : null),
                         subtitle: Text('${sizeMB.toStringAsFixed(1)} MB'),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.play_arrow, size: 22),
+                              tooltip: 'Play',
+                              onPressed: () => _playSong(filePath, title: name),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.info_outline, size: 22),
+                              tooltip: 'Song info',
+                              onPressed: () => _showSongInfoSheet(theme, song),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          ],
+                        ),
                         onTap: () => _playSong(filePath, title: name),
                         dense: true,
                       ),
@@ -544,6 +561,140 @@ class _HomePageState extends State<HomePage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  String _formatMetaDuration(dynamic seconds) {
+    if (seconds == null) return '-';
+    final s = (seconds as num).toInt();
+    final m = s ~/ 60;
+    final sec = s % 60;
+    return '$m:${sec.toString().padLeft(2, '0')}';
+  }
+
+  String _formatFileSize(dynamic bytes) {
+    if (bytes == null) return '-';
+    final mb = (bytes as num) / 1048576;
+    return '${mb.toStringAsFixed(1)} MB';
+  }
+
+  String _formatSampleRate(dynamic rate) {
+    if (rate == null) return '-';
+    final r = (rate as num).toInt();
+    if (r >= 1000) {
+      final parts = <String>[];
+      var remaining = r;
+      while (remaining > 0) {
+        final chunk = remaining % 1000;
+        remaining ~/= 1000;
+        parts.insert(0, remaining > 0 ? chunk.toString().padLeft(3, '0') : chunk.toString());
+      }
+      return '${parts.join(',')} Hz';
+    }
+    return '$r Hz';
+  }
+
+  String _formatDownloadDate(dynamic dateStr) {
+    if (dateStr == null) return '-';
+    try {
+      final dt = DateTime.parse(dateStr as String);
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+    } catch (e) {
+      debugPrint('Error parsing download date: $e');
+      return dateStr.toString();
+    }
+  }
+
+  void _showSongInfoSheet(ThemeData theme, Map<String, dynamic> song) {
+    final meta = song['meta'] as Map<String, dynamic>?;
+    final fileName = song['fileName'] as String;
+    final displayTitle = LibraryManager.displayName(fileName);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.55,
+        minChildSize: 0.3,
+        maxChildSize: 0.85,
+        expand: false,
+        builder: (ctx, scrollController) => Padding(
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+          child: meta == null
+              ? ListView(
+                  controller: scrollController,
+                  children: [
+                    Text('Song Info', style: theme.textTheme.titleMedium),
+                    const SizedBox(height: 16),
+                    Icon(Icons.info_outline, size: 48,
+                        color: theme.colorScheme.outline.withOpacity(0.4)),
+                    const SizedBox(height: 12),
+                    Text(displayTitle,
+                        style: theme.textTheme.bodyLarge,
+                        textAlign: TextAlign.center),
+                    const SizedBox(height: 12),
+                    Text('No metadata available',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.outline),
+                        textAlign: TextAlign.center),
+                    const SizedBox(height: 8),
+                    Text('Re-downloading this song will capture full metadata.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.outline),
+                        textAlign: TextAlign.center),
+                  ],
+                )
+              : ListView(
+                  controller: scrollController,
+                  children: [
+                    Text('Song Info', style: theme.textTheme.titleMedium),
+                    const Divider(),
+                    _infoRow(theme, 'Title', meta['title']),
+                    _infoRow(theme, 'Artist', meta['artist']),
+                    _infoRow(theme, 'Album', meta['album']),
+                    const SizedBox(height: 12),
+                    Text('Quality', style: theme.textTheme.titleSmall),
+                    const Divider(),
+                    _infoRow(theme, 'Requested', meta['requestedQuality']),
+                    _infoRow(theme, 'Served', meta['servedQuality']),
+                    _infoRow(theme, 'Codec', meta['codec']),
+                    _infoRow(theme, 'Bit Depth',
+                        meta['bitDepth'] != null ? '${meta['bitDepth']}-bit' : null),
+                    _infoRow(theme, 'Sample Rate', _formatSampleRate(meta['sampleRate'])),
+                    _infoRow(theme, 'Audio Mode', meta['audioMode']),
+                    const SizedBox(height: 12),
+                    Text('File', style: theme.textTheme.titleSmall),
+                    const Divider(),
+                    _infoRow(theme, 'Size', _formatFileSize(meta['fileSize'])),
+                    _infoRow(theme, 'Duration', _formatMetaDuration(meta['duration'])),
+                    _infoRow(theme, 'Extension', meta['fileExtension']),
+                    _infoRow(theme, 'Downloaded', _formatDownloadDate(meta['downloadDate'])),
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+
+  Widget _infoRow(ThemeData theme, String label, dynamic value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 110,
+            child: Text(label,
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.outline)),
+          ),
+          Expanded(
+            child: Text(value?.toString() ?? '-',
+                style: theme.textTheme.bodyMedium),
+          ),
+        ],
       ),
     );
   }

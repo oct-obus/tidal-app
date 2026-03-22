@@ -13,6 +13,7 @@ import sys
 import json
 import logging
 import traceback
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("tiddl_bridge")
@@ -349,6 +350,33 @@ def download_track(url_or_id, quality="LOSSLESS"):
         except Exception as e:
             logger.warning(f"Metadata error (non-fatal): {e}")
 
+        # Write .meta.json sidecar atomically
+        try:
+            codec_map = {".flac": "FLAC", ".m4a": "AAC", ".mp4": "AAC"}
+            meta = {
+                "title": track.title,
+                "artist": artist_name,
+                "album": track.album.title,
+                "trackId": track.id,
+                "duration": track.duration,
+                "requestedQuality": quality,
+                "servedQuality": stream.audioQuality,
+                "audioMode": getattr(stream, "audioMode", None),
+                "bitDepth": getattr(stream, "bitDepth", None),
+                "sampleRate": getattr(stream, "sampleRate", None),
+                "codec": codec_map.get(file_ext, file_ext.lstrip(".")),
+                "fileExtension": file_ext,
+                "fileSize": os.path.getsize(file_path),
+                "downloadDate": datetime.now().isoformat(),
+            }
+            meta_path = file_path + ".meta.json"
+            meta_tmp = meta_path + ".tmp"
+            with open(meta_tmp, "w") as f:
+                json.dump(meta, f, indent=2)
+            os.replace(meta_tmp, meta_path)
+        except Exception as e:
+            logger.warning(f"Meta write error (non-fatal): {e}")
+
         _write_progress("done", _PROGRESS_DONE, track.title)
 
         return _result(True, {
@@ -375,12 +403,21 @@ def list_downloads():
         songs = []
         for fname in sorted(os.listdir(download_dir)):
             fpath = os.path.join(download_dir, fname)
-            if os.path.isfile(fpath) and not fname.startswith('.') and not fname.endswith('.tmp'):
+            if os.path.isfile(fpath) and not fname.startswith('.') and not fname.endswith('.tmp') and not fname.endswith('.meta.json'):
                 size_mb = os.path.getsize(fpath) / (1024 * 1024)
+                meta = None
+                meta_path = fpath + ".meta.json"
+                try:
+                    if os.path.exists(meta_path):
+                        with open(meta_path) as f:
+                            meta = json.load(f)
+                except Exception as e:
+                    logger.warning(f"Failed to read meta for {fname}: {e}")
                 songs.append({
                     "fileName": fname,
                     "filePath": fpath,
                     "sizeMB": round(size_mb, 1),
+                    "meta": meta,
                 })
         return _result(True, {"songs": songs})
     except Exception as e:
@@ -389,7 +426,7 @@ def list_downloads():
 
 
 def delete_download(file_path):
-    """Delete a downloaded song (path must be within downloads dir)."""
+    """Delete a downloaded song and its .meta.json sidecar (path must be within downloads dir)."""
     try:
         if not DOCUMENTS_DIR:
             return _result(False, error="Documents directory not set")
@@ -399,6 +436,12 @@ def delete_download(file_path):
             return _result(False, error="Invalid file path")
         if os.path.exists(resolved):
             os.remove(resolved)
+        meta_path = resolved + ".meta.json"
+        try:
+            if os.path.exists(meta_path):
+                os.remove(meta_path)
+        except Exception as e:
+            logger.warning(f"Failed to delete meta file: {e}")
         return _result(True, {"deleted": True})
     except Exception as e:
         logger.error(f"Delete error: {e}")
