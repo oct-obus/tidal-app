@@ -1,5 +1,5 @@
 """
-ffmpeg_asyncio shim for iOS — no ffmpeg available on iOS.
+ffmpeg_asyncio shim for iOS - no ffmpeg available on iOS.
 Provides the FFmpeg class interface but operations are no-ops.
 """
 

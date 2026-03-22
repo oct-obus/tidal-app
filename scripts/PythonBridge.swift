@@ -31,10 +31,21 @@ class PythonBridge: NSObject {
     private var isInitialized = false
     private let queue = DispatchQueue(label: "com.obus.python", qos: .userInitiated)
 
+    lazy var documentsPath: String = {
+        guard let path = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first else {
+            NSLog("PythonBridge: Failed to get documents directory")
+            return NSTemporaryDirectory()
+        }
+        return path
+    }()
+
     func initialize() {
         guard !isInitialized else { return }
 
-        let resourcePath = Bundle.main.resourcePath!
+        guard let resourcePath = Bundle.main.resourcePath else {
+            NSLog("PythonBridge: Failed to get bundle resource path")
+            return
+        }
         let pythonHome = "\(resourcePath)/python"
         let libPath = "\(resourcePath)/python/lib/python3.13"
         let dynloadPath = "\(libPath)/lib-dynload"
@@ -49,11 +60,9 @@ class PythonBridge: NSObject {
         _ = c_setenv("PYTHONPATH", pythonPath, 1)
         _ = c_setenv("PYTHONDONTWRITEBYTECODE", "1", 1)
         _ = c_setenv("PYTHONUNBUFFERED", "1", 1)
-        // SSL certificate bundle
         _ = c_setenv("SSL_CERT_FILE", "\(resourcePath)/python/lib/python3.13/certifi/cacert.pem", 1)
 
-        // Set TIDDL_PATH to Documents for config storage
-        let docs = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
+        let docs = self.documentsPath
         _ = c_setenv("TIDDL_PATH", docs, 1)
 
         Py_Initialize()
@@ -196,9 +205,9 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
             }
 
         case "downloadProgress":
-            // Read progress file directly from Swift — don't use Python queue
+            // Read progress file directly from Swift, not via Python queue
             // (the Python queue is blocked by the running download)
-            let docs = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
+            let docs = bridge.documentsPath
             let progressPath = "\(docs)/.download_progress.json"
             if let data = FileManager.default.contents(atPath: progressPath),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -262,7 +271,7 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "INVALID_ARGS", message: "Missing 'json'", details: nil))
                 return
             }
-            let docs = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
+            let docs = bridge.documentsPath
             let path = "\(docs)/settings.json"
             let tmp = "\(path).tmp"
             do {
@@ -276,7 +285,7 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
             result(true)
 
         case "loadSettings":
-            let docs = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
+            let docs = bridge.documentsPath
             let path = "\(docs)/settings.json"
             if let data = FileManager.default.contents(atPath: path),
                let str = String(data: data, encoding: .utf8) {

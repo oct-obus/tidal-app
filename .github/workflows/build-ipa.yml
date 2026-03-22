@@ -10,7 +10,6 @@ env:
   PYTHON_BUILD: "b13"
 
 jobs:
-  # --- Simulator smoke test: verify Python initializes ---
   test-simulator:
     name: 📱 Simulator smoke test
     runs-on: macos-latest
@@ -156,9 +155,9 @@ jobs:
             echo "❌ FAIL: Python failed to initialize"
             exit 1
           elif grep -q "PythonBridge" /tmp/sim_logs.txt; then
-            echo "⚠️ Plugin code ran but Python init status unclear — passing"
+            echo "⚠️ Plugin code ran but Python init status unclear - passing"
           else
-            echo "⚠️ No PythonBridge log lines found — app may not have launched fully"
+            echo "⚠️ No PythonBridge log lines found - app may not have launched fully"
             echo "Full log line count: $(wc -l < /tmp/sim_logs.txt)"
           fi
 
@@ -172,7 +171,6 @@ jobs:
             exit 1
           fi
 
-  # --- Device build: produce unsigned IPA ---
   build-ios:
     name: 🍎 Build unsigned IPA
     runs-on: macos-latest

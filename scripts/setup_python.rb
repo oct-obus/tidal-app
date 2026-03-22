@@ -8,8 +8,6 @@ project_path = File.join(__dir__, '..', 'ios', 'Runner.xcodeproj')
 project = Xcodeproj::Project.open(project_path)
 target = project.targets.find { |t| t.name == 'Runner' }
 
-# --- Add Python.xcframework ---
-
 # The framework is expected at ios/Python.xcframework
 fw_path = 'Python.xcframework'
 fw_ref = project.frameworks_group.new_file(fw_path, :project)
@@ -28,23 +26,14 @@ end
 build_file = embed_phase.add_file_reference(fw_ref)
 build_file.settings = { 'ATTRIBUTES' => ['CodeSignOnCopy', 'RemoveHeadersOnCopy'] }
 
-# --- Add PythonBridge.swift ---
-
 runner_group = project.main_group.find_subpath('Runner', true)
 bridge_ref = runner_group.new_file('PythonBridge.swift')
 target.source_build_phase.add_file_reference(bridge_ref)
 
-# --- Add AudioBridge.swift ---
-
 audio_ref = runner_group.new_file('AudioBridge.swift')
 target.source_build_phase.add_file_reference(audio_ref)
 
-# --- Add Run Script build phase for Python stdlib installation ---
-# NOTE: Stdlib installation is now done post-build by scripts/post_build.sh
-# The Xcode build phase is no longer needed for this.
-# We only keep the app code/packages copy for the build to reference.
-
-# --- Add header search path for Python headers ---
+# Stdlib is installed post-build by scripts/post_build.sh
 
 target.build_configurations.each do |config|
   settings = config.build_settings

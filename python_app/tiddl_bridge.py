@@ -1,5 +1,5 @@
 """
-tiddl_bridge.py — iOS bridge for tiddl v3 (Tidal downloader).
+iOS bridge for tiddl v3.
 Called from Swift PythonBridge via PyRun_SimpleString.
 
 Provides functions for:
@@ -17,19 +17,24 @@ import traceback
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("tiddl_bridge")
 
+_PROGRESS_LOOKUP = 0
+_PROGRESS_STREAM = 5
+_PROGRESS_DOWNLOAD_START = 10
+_PROGRESS_DOWNLOAD_RANGE = 80
+_PROGRESS_METADATA = 92
+_PROGRESS_DONE = 100
+
 # Diagnostic: log sys.path and verify critical imports at load time
 logger.info(f"Python {sys.version}")
 logger.info(f"sys.path = {sys.path}")
 
 # Test critical imports eagerly so we catch issues at startup
-_import_errors = []
 for _mod in ["tiddl", "tiddl.core.auth", "tiddl.core.api", "tiddl.core.utils", "requests", "pydantic"]:
     try:
         __import__(_mod)
         logger.info(f"  ✓ import {_mod}")
     except Exception as _e:
         logger.error(f"  ✗ import {_mod}: {_e}")
-        _import_errors.append((_mod, str(_e)))
 
 # iOS Documents directory for persistent storage
 DOCUMENTS_DIR = None
@@ -115,7 +120,6 @@ def check_auth_token(device_code):
 
 
 def refresh_auth():
-    """Refresh the auth token using saved refresh token."""
     try:
         config_path = _get_config_path()
         if not config_path or not os.path.exists(config_path):
@@ -145,7 +149,6 @@ def refresh_auth():
 
 
 def logout():
-    """Clear saved auth credentials."""
     try:
         config_path = _get_config_path()
         if config_path and os.path.exists(config_path):
@@ -161,7 +164,6 @@ def logout():
 
 
 def get_auth_status():
-    """Check if we have saved auth credentials."""
     try:
         config_path = _get_config_path()
         if not config_path or not os.path.exists(config_path):
@@ -204,7 +206,6 @@ def _get_tidal_api():
 
 
 def get_track_info(url_or_id):
-    """Get track info from Tidal URL or ID."""
     try:
         from tiddl.cli.utils.resource import TidalResource
 
@@ -242,7 +243,6 @@ def _write_progress(step, pct=0, detail=""):
 
 
 def get_download_progress():
-    """Read current download progress."""
     try:
         if not DOCUMENTS_DIR:
             return _result(True, {"step": "idle", "pct": 0, "detail": ""})
@@ -257,7 +257,6 @@ def get_download_progress():
 
 
 def download_track(url_or_id, quality="LOSSLESS"):
-    """Download a track from Tidal."""
     try:
         from tiddl.cli.utils.resource import TidalResource
         from tiddl.core.metadata import add_track_metadata, Cover
@@ -265,7 +264,7 @@ def download_track(url_or_id, quality="LOSSLESS"):
         if not DOCUMENTS_DIR:
             return _result(False, error="Documents directory not set")
 
-        _write_progress("lookup", 0, "Looking up track...")
+        _write_progress("lookup", _PROGRESS_LOOKUP, "Looking up track...")
 
         api = _get_tidal_api()
         resource = TidalResource.from_string(url_or_id)
@@ -274,7 +273,7 @@ def download_track(url_or_id, quality="LOSSLESS"):
 
         track = api.get_track(resource.id)
         artist_name = track.artist.name if track.artist else "Unknown"
-        _write_progress("stream", 5, f"{artist_name} — {track.title}")
+        _write_progress("stream", _PROGRESS_STREAM, f"{artist_name} - {track.title}")
 
         stream = api.get_track_stream(resource.id, quality)
 
@@ -284,7 +283,7 @@ def download_track(url_or_id, quality="LOSSLESS"):
             from requests import Session as ReqSession
 
             urls, file_ext = parse_track_stream(stream)
-            _write_progress("downloading", 10, "Starting download...")
+            _write_progress("downloading", _PROGRESS_DOWNLOAD_START, "Starting download...")
 
             # Estimate total size from first segment's Content-Length
             est_total = 0
@@ -299,7 +298,7 @@ def download_track(url_or_id, quality="LOSSLESS"):
                     total_bytes += len(chunk)
                     if i == 0 and len(urls) > 1:
                         est_total = len(chunk) * len(urls)
-                    pct = 10 + int(80 * (i + 1) / len(urls))
+                    pct = _PROGRESS_DOWNLOAD_START + int(_PROGRESS_DOWNLOAD_RANGE * (i + 1) / len(urls))
                     mb_done = total_bytes / (1024 * 1024)
                     if est_total > 0:
                         mb_total = est_total / (1024 * 1024)
@@ -310,10 +309,10 @@ def download_track(url_or_id, quality="LOSSLESS"):
         except ImportError:
             # Fallback: use get_track_stream_data if parse not available
             from tiddl.core.utils.download import get_track_stream_data
-            _write_progress("downloading", 10, "Downloading...")
+            _write_progress("downloading", _PROGRESS_DOWNLOAD_START, "Downloading...")
             stream_data, file_ext = get_track_stream_data(stream)
 
-        _write_progress("metadata", 92, "Adding metadata...")
+        _write_progress("metadata", _PROGRESS_METADATA, "Adding metadata...")
 
         download_dir = os.path.join(DOCUMENTS_DIR, "downloads")
         os.makedirs(download_dir, exist_ok=True)
@@ -350,7 +349,7 @@ def download_track(url_or_id, quality="LOSSLESS"):
         except Exception as e:
             logger.warning(f"Metadata error (non-fatal): {e}")
 
-        _write_progress("done", 100, track.title)
+        _write_progress("done", _PROGRESS_DONE, track.title)
 
         return _result(True, {
             "filePath": file_path,
@@ -367,7 +366,6 @@ def download_track(url_or_id, quality="LOSSLESS"):
 
 
 def list_downloads():
-    """List all downloaded songs in the downloads directory."""
     try:
         if not DOCUMENTS_DIR:
             return _result(True, {"songs": []})

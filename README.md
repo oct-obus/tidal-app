@@ -4,10 +4,10 @@ Flutter iOS app for downloading and playing Tidal tracks, powered by [tiddl](htt
 
 ## Architecture
 
-- **Flutter/Dart** — UI and audio playback
-- **Swift** — Platform channel bridge to embedded CPython
-- **Python (embedded)** — tiddl for Tidal API interaction and downloads
-- **GitHub Actions** — Builds unsigned IPA on macOS runner
+- **Flutter/Dart** - UI and audio playback
+- **Swift** - Platform channel bridge to embedded CPython
+- **Python (embedded)** - tiddl for Tidal API interaction and downloads
+- **GitHub Actions** - Builds unsigned IPA on macOS runner
 
 ## Build
 

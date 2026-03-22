@@ -124,7 +124,6 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
     }
 
     private func playFile(_ filePath: String, speed: Float) {
-        // Clean up previous player
         cleanupObservers()
 
         let url = URL(fileURLWithPath: filePath)
@@ -137,7 +136,6 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
         isPlaying = true
         player?.rate = speed
 
-        // Observe when track ends
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
@@ -148,7 +146,6 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
             self?.stateChannel?.invokeMethod("onPlaybackComplete", arguments: nil)
         }
 
-        // Periodic time observer for now playing info updates
         let interval = CMTime(seconds: 1.0, preferredTimescale: 1000)
         timeObserver = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] _ in
             self?.updateNowPlayingInfo()
