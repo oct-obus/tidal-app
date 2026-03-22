@@ -201,8 +201,8 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
         let duration = player?.currentItem?.duration.seconds ?? 0
         return [
             "isPlaying": isPlaying,
-            "position": position.isNaN ? 0.0 : position,
-            "duration": duration.isNaN ? 0.0 : duration,
+            "position": (position.isNaN || position.isInfinite) ? 0.0 : position,
+            "duration": (duration.isNaN || duration.isInfinite) ? 0.0 : duration,
             "speed": Double(playbackSpeed),
         ]
     }
@@ -214,9 +214,9 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
         info[MPMediaItemPropertyAlbumTitle] = currentAlbum ?? ""
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? NSNumber(value: playbackSpeed) : NSNumber(value: 0)
         let position = player?.currentTime().seconds ?? 0
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = position.isNaN ? 0 : position
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = (position.isNaN || position.isInfinite) ? 0 : position
         let duration = player?.currentItem?.duration.seconds ?? 0
-        info[MPMediaItemPropertyPlaybackDuration] = duration.isNaN ? 0 : duration
+        info[MPMediaItemPropertyPlaybackDuration] = (duration.isNaN || duration.isInfinite) ? 0 : duration
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 

@@ -54,6 +54,7 @@ class _HomePageState extends State<HomePage> {
   double _playbackSpeed = 1.0;
   double _position = 0;
   double _duration = 0;
+  String _audioQuality = 'LOSSLESS';
   List<Map<String, dynamic>> _library = [];
 
   String? _authUserCode;
@@ -66,6 +67,7 @@ class _HomePageState extends State<HomePage> {
   DateTime? _lastPollTime;
 
   static const _speedPresets = [0.75, 1.0, 1.25, 1.5, 2.0];
+  static const _qualityOptions = ['LOW', 'HIGH', 'LOSSLESS', 'HI_RES_LOSSLESS'];
 
   @override
   void initState() {
@@ -85,7 +87,7 @@ class _HomePageState extends State<HomePage> {
   void _startPlayerStatePolling() {
     _playerStateTimer?.cancel();
     _playerStateTimer =
-        Timer.periodic(const Duration(seconds: 1), (_) async {
+        Timer.periodic(const Duration(milliseconds: 500), (_) async {
       try {
         final state =
             await _audioChannel.invokeMapMethod<String, dynamic>('getState');
@@ -321,7 +323,7 @@ class _HomePageState extends State<HomePage> {
 
     try {
       final response =
-          await _channel.invokeMethod<String>('download', {'url': url});
+          await _channel.invokeMethod<String>('download', {'url': url, 'quality': _audioQuality});
       if (response == null) {
         setState(() => _status = 'Download failed: no response');
         return;
@@ -449,12 +451,16 @@ class _HomePageState extends State<HomePage> {
         title: const Text('Tidal Downloader'),
         centerTitle: true,
         actions: [
-          if (_isAuthenticated)
+          if (_isAuthenticated) ...[
+            IconButton(
+                icon: const Icon(Icons.settings),
+                onPressed: () => _showSettingsSheet(theme),
+                tooltip: 'Settings'),
             IconButton(
                 icon: const Icon(Icons.logout),
                 onPressed: _logout,
-                tooltip: 'Log out')
-          else
+                tooltip: 'Log out'),
+          ] else
             IconButton(
                 icon: const Icon(Icons.login),
                 onPressed: _isAuthenticating ? null : _startAuth,
@@ -714,6 +720,13 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  String _formatDuration(double seconds) {
+    if (seconds <= 0 || seconds.isInfinite || seconds.isNaN) return '0:00';
+    final m = seconds ~/ 60;
+    final s = (seconds % 60).toInt();
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
   Widget _buildNowPlayingBar(ThemeData theme) {
     return Container(
       decoration: BoxDecoration(
@@ -727,21 +740,32 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (_duration > 0)
-              SliderTheme(
-                data: const SliderThemeData(
-                  trackHeight: 2,
-                  thumbShape:
-                      RoundSliderThumbShape(enabledThumbRadius: 6),
-                  overlayShape:
-                      RoundSliderOverlayShape(overlayRadius: 12),
-                ),
-                child: Slider(
-                  value: _position.clamp(0, _duration),
-                  max: _duration > 0 ? _duration : 1,
-                  onChanged: (v) => _seekTo(v),
-                ),
+            SliderTheme(
+              data: const SliderThemeData(
+                trackHeight: 2,
+                thumbShape: RoundSliderThumbShape(enabledThumbRadius: 6),
+                overlayShape: RoundSliderOverlayShape(overlayRadius: 12),
               ),
+              child: Slider(
+                value: _duration > 0 ? _position.clamp(0, _duration) : 0,
+                max: _duration > 0 ? _duration : 1,
+                onChanged: _duration > 0 ? (v) => _seekTo(v) : null,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(_formatDuration(_position),
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.outline)),
+                  Text(_formatDuration(_duration),
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.outline)),
+                ],
+              ),
+            ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
               child: Row(
@@ -847,6 +871,63 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: 16),
           ],
+        ),
+      ),
+    );
+  }
+
+  void _showSettingsSheet(ThemeData theme) {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Settings', style: theme.textTheme.titleLarge),
+              const SizedBox(height: 20),
+              Text('Download Quality',
+                  style: theme.textTheme.titleSmall),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _qualityOptions.map((q) {
+                  final label = {
+                    'LOW': 'Low (96)',
+                    'HIGH': 'High (320)',
+                    'LOSSLESS': 'Lossless (FLAC)',
+                    'HI_RES_LOSSLESS': 'Hi-Res',
+                  }[q] ?? q;
+                  return ChoiceChip(
+                    label: Text(label),
+                    selected: _audioQuality == q,
+                    onSelected: (_) {
+                      setState(() => _audioQuality = q);
+                      setSheetState(() {});
+                    },
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Quality affects new downloads only. '
+                'Hi-Res requires a Tidal HiFi Plus subscription.',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.outline),
+              ),
+              const SizedBox(height: 8),
+              if (_pythonVersion != null)
+                Text(
+                  'Python $_pythonVersion',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.outline),
+                ),
+              const SizedBox(height: 16),
+            ],
+          ),
         ),
       ),
     );

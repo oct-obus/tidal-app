@@ -196,9 +196,20 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
             }
 
         case "downloadProgress":
-            bridge.runWithResult("tiddl_bridge.get_download_progress()") { response in
-                result(response)
+            // Read progress file directly from Swift — don't use Python queue
+            // (the Python queue is blocked by the running download)
+            let docs = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
+            let progressPath = "\(docs)/.download_progress.json"
+            if let data = FileManager.default.contents(atPath: progressPath),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let wrapped: [String: Any] = ["success": true, "data": json]
+                if let jsonData = try? JSONSerialization.data(withJSONObject: wrapped),
+                   let jsonStr = String(data: jsonData, encoding: .utf8) {
+                    result(jsonStr)
+                    return
+                }
             }
+            result("{\"success\":true,\"data\":{\"step\":\"idle\",\"pct\":0,\"detail\":\"\"}}")
 
         case "listDownloads":
             bridge.runWithResult("tiddl_bridge.list_downloads()") { response in
