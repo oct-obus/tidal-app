@@ -256,6 +256,35 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(response)
             }
 
+        case "saveSettings":
+            guard let args = call.arguments as? [String: Any],
+                  let jsonStr = args["json"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'json'", details: nil))
+                return
+            }
+            let docs = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
+            let path = "\(docs)/settings.json"
+            let tmp = "\(path).tmp"
+            do {
+                try jsonStr.write(toFile: tmp, atomically: false, encoding: .utf8)
+                try FileManager.default.moveItem(atPath: tmp, toPath: path)
+            } catch {
+                // moveItem fails if dest exists; replace manually
+                try? FileManager.default.removeItem(atPath: path)
+                try? FileManager.default.moveItem(atPath: tmp, toPath: path)
+            }
+            result(true)
+
+        case "loadSettings":
+            let docs = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
+            let path = "\(docs)/settings.json"
+            if let data = FileManager.default.contents(atPath: path),
+               let str = String(data: data, encoding: .utf8) {
+                result(str)
+            } else {
+                result(nil)
+            }
+
         default:
             result(FlutterMethodNotImplemented)
         }

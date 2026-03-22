@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const TidalApp());
 }
 
@@ -39,6 +40,10 @@ class _HomePageState extends State<HomePage> {
 
   final _urlController = TextEditingController();
 
+  // Player position/duration as ValueNotifiers for efficient rebuilds
+  final _positionNotifier = ValueNotifier<double>(0);
+  final _durationNotifier = ValueNotifier<double>(0);
+
   String _status = 'Initializing...';
   bool _isAuthenticated = false;
   bool _isDownloading = false;
@@ -52,10 +57,13 @@ class _HomePageState extends State<HomePage> {
   String _downloadStep = '';
   double _downloadProgress = 0;
   double _playbackSpeed = 1.0;
-  double _position = 0;
-  double _duration = 0;
-  String _audioQuality = 'LOSSLESS';
   List<Map<String, dynamic>> _library = [];
+
+  // Settings (persisted)
+  String _audioQuality = 'LOSSLESS';
+  double _speedMin = 0.70;
+  double _speedMax = 1.40;
+  double _speedStep = 0.05;
 
   String? _authUserCode;
   String? _authVerifyUrl;
@@ -66,13 +74,14 @@ class _HomePageState extends State<HomePage> {
   int _authPollInterval = 5;
   DateTime? _lastPollTime;
 
-  static const _speedPresets = [0.75, 1.0, 1.25, 1.5, 2.0];
   static const _qualityOptions = ['LOW', 'HIGH', 'LOSSLESS', 'HI_RES_LOSSLESS'];
+  static const _stepOptions = [0.025, 0.05, 0.10, 0.15];
 
   @override
   void initState() {
     super.initState();
     _setupAudioCallbacks();
+    _loadSettings();
     _initPython();
   }
 
@@ -92,11 +101,18 @@ class _HomePageState extends State<HomePage> {
         final state =
             await _audioChannel.invokeMapMethod<String, dynamic>('getState');
         if (state != null && mounted) {
-          setState(() {
-            _isPlaying = state['isPlaying'] == true;
-            _position = (state['position'] as num?)?.toDouble() ?? 0;
-            _duration = (state['duration'] as num?)?.toDouble() ?? 0;
-          });
+          final newPos = (state['position'] as num?)?.toDouble() ?? 0;
+          final newDur = (state['duration'] as num?)?.toDouble() ?? 0;
+          final newPlaying = state['isPlaying'] == true;
+
+          // Update ValueNotifiers (only triggers slider rebuild)
+          _positionNotifier.value = newPos;
+          _durationNotifier.value = newDur;
+
+          // Only setState if play state changed (avoids full tree rebuild)
+          if (newPlaying != _isPlaying) {
+            setState(() => _isPlaying = newPlaying);
+          }
         }
       } catch (_) {}
     });
@@ -110,11 +126,46 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     _urlController.dispose();
+    _positionNotifier.dispose();
+    _durationNotifier.dispose();
     _authPollTimer?.cancel();
     _progressTimer?.cancel();
     _playerStateTimer?.cancel();
     super.dispose();
   }
+
+  // --- Settings persistence ---
+
+  Future<void> _loadSettings() async {
+    try {
+      final json = await _channel.invokeMethod<String>('loadSettings');
+      if (json != null) {
+        final data = jsonDecode(json);
+        setState(() {
+          _audioQuality = data['audioQuality'] as String? ?? 'LOSSLESS';
+          _speedMin = (data['speedMin'] as num?)?.toDouble() ?? 0.70;
+          _speedMax = (data['speedMax'] as num?)?.toDouble() ?? 1.40;
+          _speedStep = (data['speedStep'] as num?)?.toDouble() ?? 0.05;
+          _playbackSpeed = (data['lastSpeed'] as num?)?.toDouble() ?? 1.0;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveSettings() async {
+    try {
+      final json = jsonEncode({
+        'audioQuality': _audioQuality,
+        'speedMin': _speedMin,
+        'speedMax': _speedMax,
+        'speedStep': _speedStep,
+        'lastSpeed': _playbackSpeed,
+      });
+      await _channel.invokeMethod('saveSettings', {'json': json});
+    } catch (_) {}
+  }
+
+  // --- Init ---
 
   Future<void> _initPython() async {
     try {
@@ -139,6 +190,8 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // --- Auth ---
+
   Future<void> _openAuthUrl(String url) async {
     final uri = Uri.parse(url);
     bool opened = false;
@@ -154,8 +207,7 @@ class _HomePageState extends State<HomePage> {
       await Clipboard.setData(ClipboardData(text: url));
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content:
-                Text('Could not open browser. Link copied to clipboard.')),
+            content: Text('Could not open browser. Link copied to clipboard.')),
       );
     }
   }
@@ -322,8 +374,8 @@ class _HomePageState extends State<HomePage> {
     _startProgressPolling();
 
     try {
-      final response =
-          await _channel.invokeMethod<String>('download', {'url': url, 'quality': _audioQuality});
+      final response = await _channel.invokeMethod<String>(
+          'download', {'url': url, 'quality': _audioQuality});
       if (response == null) {
         setState(() => _status = 'Download failed: no response');
         return;
@@ -338,6 +390,7 @@ class _HomePageState extends State<HomePage> {
           _trackArtist = dl['artist'];
           _trackAlbum = dl['album'];
         });
+        _urlController.clear();
         _loadLibrary();
       } else {
         setState(() => _status = 'Error: ${data["error"]}');
@@ -398,9 +451,11 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _setSpeed(double speed) async {
+    final clamped = speed.clamp(_speedMin, _speedMax);
     try {
-      await _audioChannel.invokeMethod('setSpeed', {'speed': speed});
-      setState(() => _playbackSpeed = speed);
+      await _audioChannel.invokeMethod('setSpeed', {'speed': clamped});
+      setState(() => _playbackSpeed = clamped);
+      _saveSettings();
     } catch (_) {}
   }
 
@@ -439,6 +494,26 @@ class _HomePageState extends State<HomePage> {
       }
       _loadLibrary();
     } catch (_) {}
+  }
+
+  // --- Helpers ---
+
+  String _formatDuration(double seconds) {
+    if (seconds <= 0 || seconds.isInfinite || seconds.isNaN) return '0:00';
+    final m = seconds ~/ 60;
+    final s = (seconds % 60).toInt();
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  // Strip track ID from display name: "Artist - Title [12345]" → "Artist - Title"
+  String _displayName(String fileName) {
+    var name =
+        fileName.contains('.') ? fileName.substring(0, fileName.lastIndexOf('.')) : fileName;
+    final bracketIdx = name.lastIndexOf(' [');
+    if (bracketIdx > 0 && name.endsWith(']')) {
+      name = name.substring(0, bracketIdx);
+    }
+    return name;
   }
 
   // --- UI ---
@@ -515,8 +590,7 @@ class _HomePageState extends State<HomePage> {
                         children: [
                           TextButton.icon(
                             onPressed: () => _openAuthUrl(_authVerifyUrl!),
-                            icon:
-                                const Icon(Icons.open_in_browser, size: 16),
+                            icon: const Icon(Icons.open_in_browser, size: 16),
                             label: const Text('Open login page'),
                           ),
                           TextButton.icon(
@@ -564,6 +638,7 @@ class _HomePageState extends State<HomePage> {
   Widget _buildMainContent(ThemeData theme) {
     return Column(
       children: [
+        // URL input
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
           child: Row(
@@ -611,14 +686,14 @@ class _HomePageState extends State<HomePage> {
             ],
           ),
         ),
-        if (_isDownloading) ...[
+        // Download progress
+        if (_isDownloading)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: Column(
               children: [
                 LinearProgressIndicator(
-                    value:
-                        _downloadProgress > 0 ? _downloadProgress : null),
+                    value: _downloadProgress > 0 ? _downloadProgress : null),
                 const SizedBox(height: 4),
                 Text(_downloadStep,
                     style: theme.textTheme.bodySmall
@@ -626,8 +701,8 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           ),
-        ],
         const SizedBox(height: 8),
+        // Library
         Expanded(
           child: _library.isEmpty
               ? Center(
@@ -636,8 +711,7 @@ class _HomePageState extends State<HomePage> {
                     children: [
                       Icon(Icons.library_music,
                           size: 64,
-                          color:
-                              theme.colorScheme.outline.withOpacity(0.3)),
+                          color: theme.colorScheme.outline.withOpacity(0.3)),
                       const SizedBox(height: 12),
                       Text('No songs yet',
                           style: theme.textTheme.bodyLarge
@@ -656,9 +730,7 @@ class _HomePageState extends State<HomePage> {
                     final fileName = song['fileName'] as String;
                     final sizeMB = song['sizeMB'] as num;
                     final isActive = _currentFilePath == filePath;
-                    final displayName = fileName.contains('.')
-                        ? fileName.substring(0, fileName.lastIndexOf('.'))
-                        : fileName;
+                    final name = _displayName(fileName);
 
                     return Dismissible(
                       key: Key(filePath),
@@ -667,23 +739,20 @@ class _HomePageState extends State<HomePage> {
                         color: Colors.red,
                         alignment: Alignment.centerRight,
                         padding: const EdgeInsets.only(right: 16),
-                        child:
-                            const Icon(Icons.delete, color: Colors.white),
+                        child: const Icon(Icons.delete, color: Colors.white),
                       ),
                       confirmDismiss: (_) async {
                         return await showDialog<bool>(
                           context: ctx,
                           builder: (c) => AlertDialog(
                             title: const Text('Delete song?'),
-                            content: Text('Delete "$displayName"?'),
+                            content: Text('Delete "$name"?'),
                             actions: [
                               TextButton(
-                                  onPressed: () =>
-                                      Navigator.pop(c, false),
+                                  onPressed: () => Navigator.pop(c, false),
                                   child: const Text('Cancel')),
                               FilledButton(
-                                  onPressed: () =>
-                                      Navigator.pop(c, true),
+                                  onPressed: () => Navigator.pop(c, true),
                                   child: const Text('Delete')),
                             ],
                           ),
@@ -695,10 +764,9 @@ class _HomePageState extends State<HomePage> {
                           isActive && _isPlaying
                               ? Icons.equalizer
                               : Icons.music_note,
-                          color:
-                              isActive ? theme.colorScheme.primary : null,
+                          color: isActive ? theme.colorScheme.primary : null,
                         ),
-                        title: Text(displayName,
+                        title: Text(name,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: isActive
@@ -706,10 +774,8 @@ class _HomePageState extends State<HomePage> {
                                     color: theme.colorScheme.primary,
                                     fontWeight: FontWeight.bold)
                                 : null),
-                        subtitle:
-                            Text('${sizeMB.toStringAsFixed(1)} MB'),
-                        onTap: () =>
-                            _playSong(filePath, title: displayName),
+                        subtitle: Text('${sizeMB.toStringAsFixed(1)} MB'),
+                        onTap: () => _playSong(filePath, title: name),
                         dense: true,
                       ),
                     );
@@ -718,13 +784,6 @@ class _HomePageState extends State<HomePage> {
         ),
       ],
     );
-  }
-
-  String _formatDuration(double seconds) {
-    if (seconds <= 0 || seconds.isInfinite || seconds.isNaN) return '0:00';
-    final m = seconds ~/ 60;
-    final s = (seconds % 60).toInt();
-    return '$m:${s.toString().padLeft(2, '0')}';
   }
 
   Widget _buildNowPlayingBar(ThemeData theme) {
@@ -740,32 +799,47 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SliderTheme(
-              data: const SliderThemeData(
-                trackHeight: 2,
-                thumbShape: RoundSliderThumbShape(enabledThumbRadius: 6),
-                overlayShape: RoundSliderOverlayShape(overlayRadius: 12),
-              ),
-              child: Slider(
-                value: _duration > 0 ? _position.clamp(0, _duration) : 0,
-                max: _duration > 0 ? _duration : 1,
-                onChanged: _duration > 0 ? (v) => _seekTo(v) : null,
+            // Seek slider — uses ValueListenableBuilder for efficient updates
+            ValueListenableBuilder<double>(
+              valueListenable: _durationNotifier,
+              builder: (_, dur, __) => ValueListenableBuilder<double>(
+                valueListenable: _positionNotifier,
+                builder: (_, pos, __) => SliderTheme(
+                  data: const SliderThemeData(
+                    trackHeight: 2,
+                    thumbShape: RoundSliderThumbShape(enabledThumbRadius: 6),
+                    overlayShape: RoundSliderOverlayShape(overlayRadius: 12),
+                  ),
+                  child: Slider(
+                    value: dur > 0 ? pos.clamp(0, dur) : 0,
+                    max: dur > 0 ? dur : 1,
+                    onChanged: dur > 0 ? (v) => _seekTo(v) : null,
+                  ),
+                ),
               ),
             ),
+            // Time indicators
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(_formatDuration(_position),
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.outline)),
-                  Text(_formatDuration(_duration),
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.outline)),
-                ],
+              child: ValueListenableBuilder<double>(
+                valueListenable: _durationNotifier,
+                builder: (_, dur, __) => ValueListenableBuilder<double>(
+                  valueListenable: _positionNotifier,
+                  builder: (_, pos, __) => Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(_formatDuration(pos),
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: theme.colorScheme.outline)),
+                      Text(_formatDuration(dur),
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: theme.colorScheme.outline)),
+                    ],
+                  ),
+                ),
               ),
             ),
+            // Controls
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
               child: Row(
@@ -780,11 +854,10 @@ class _HomePageState extends State<HomePage> {
                                 ?.copyWith(fontWeight: FontWeight.bold),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis),
-                        if (_trackArtist != null &&
-                            _trackArtist!.isNotEmpty)
+                        if (_trackArtist != null && _trackArtist!.isNotEmpty)
                           Text(_trackArtist!,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.outline),
+                              style: theme.textTheme.bodySmall
+                                  ?.copyWith(color: theme.colorScheme.outline),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis),
                       ],
@@ -807,8 +880,7 @@ class _HomePageState extends State<HomePage> {
                         color: theme.colorScheme.primaryContainer,
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Text(
-                          '${(_playbackSpeed * 100).round()}%',
+                      child: Text('${(_playbackSpeed * 100).round()}%',
                           style: theme.textTheme.bodySmall
                               ?.copyWith(fontWeight: FontWeight.bold)),
                     ),
@@ -822,74 +894,134 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  // --- Speed Sheet ---
+
   void _showSpeedSheet(ThemeData theme) {
+    final customController = TextEditingController(
+        text: (_playbackSpeed * 100).round().toString());
+
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Playback Speed', style: theme.textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Text('${(_playbackSpeed * 100).round()}%',
-                style: theme.textTheme.headlineMedium
-                    ?.copyWith(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4),
-            Text('Speed changes pitch (turntable style)',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.outline)),
-            const SizedBox(height: 16),
-            StatefulBuilder(
-              builder: (ctx, setSheetState) => Slider(
-                value: _playbackSpeed,
-                min: 0.5,
-                max: 2.0,
-                divisions: 30,
-                label: '${(_playbackSpeed * 100).round()}%',
-                onChanged: (v) {
-                  _setSpeed(v);
-                  setSheetState(() {});
-                },
-              ),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: _speedPresets.map((speed) {
-                final isActive =
-                    (_playbackSpeed - speed).abs() < 0.01;
-                return FilterChip(
-                  label: Text('${(speed * 100).round()}%'),
-                  selected: isActive,
-                  onSelected: (_) {
-                    _setSpeed(speed);
-                    Navigator.pop(ctx);
+        padding: EdgeInsets.fromLTRB(
+            24, 24, 24, MediaQuery.of(ctx).viewInsets.bottom + 24),
+        child: StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            // Generate preset chips from range and step
+            final presets = <double>[];
+            for (var s = _speedMin; s <= _speedMax + 0.001; s += _speedStep) {
+              presets.add(double.parse(s.toStringAsFixed(3)));
+            }
+
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Playback Speed', style: theme.textTheme.titleMedium),
+                const SizedBox(height: 8),
+                Text('${(_playbackSpeed * 100).round()}%',
+                    style: theme.textTheme.headlineMedium
+                        ?.copyWith(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                Text('Speed changes pitch (turntable style)',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.outline)),
+                const SizedBox(height: 12),
+                Slider(
+                  value: _playbackSpeed.clamp(_speedMin, _speedMax),
+                  min: _speedMin,
+                  max: _speedMax,
+                  divisions:
+                      ((_speedMax - _speedMin) / _speedStep).round().clamp(1, 100),
+                  label: '${(_playbackSpeed * 100).round()}%',
+                  onChanged: (v) {
+                    _setSpeed(v);
+                    setSheetState(() {});
+                    customController.text = (v * 100).round().toString();
                   },
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 16),
-          ],
+                ),
+                const SizedBox(height: 4),
+                // Custom speed input
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    SizedBox(
+                      width: 80,
+                      child: TextField(
+                        controller: customController,
+                        keyboardType: TextInputType.number,
+                        textAlign: TextAlign.center,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          suffixText: '%',
+                          border: OutlineInputBorder(),
+                        ),
+                        onSubmitted: (val) {
+                          final pct = double.tryParse(val);
+                          if (pct != null) {
+                            _setSpeed(pct / 100);
+                            setSheetState(() {});
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                // Preset chips
+                if (presets.length <= 20)
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: presets.map((speed) {
+                      final isActive = (_playbackSpeed - speed).abs() < 0.001;
+                      return FilterChip(
+                        label: Text('${(speed * 100).round()}%',
+                            style: const TextStyle(fontSize: 12)),
+                        selected: isActive,
+                        visualDensity: VisualDensity.compact,
+                        onSelected: (_) {
+                          _setSpeed(speed);
+                          Navigator.pop(ctx);
+                        },
+                      );
+                    }).toList(),
+                  ),
+                const SizedBox(height: 12),
+              ],
+            );
+          },
         ),
       ),
     );
   }
 
+  // --- Settings Sheet ---
+
   void _showSettingsSheet(ThemeData theme) {
+    final minCtrl =
+        TextEditingController(text: (_speedMin * 100).round().toString());
+    final maxCtrl =
+        TextEditingController(text: (_speedMax * 100).round().toString());
+    final stepCtrl =
+        TextEditingController(text: (_speedStep * 100).toStringAsFixed(1));
+
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) => Padding(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.fromLTRB(
+              24, 24, 24, MediaQuery.of(ctx).viewInsets.bottom + 24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('Settings', style: theme.textTheme.titleLarge),
               const SizedBox(height: 20),
-              Text('Download Quality',
-                  style: theme.textTheme.titleSmall),
+
+              // Audio quality
+              Text('Download Quality', style: theme.textTheme.titleSmall),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
@@ -898,7 +1030,7 @@ class _HomePageState extends State<HomePage> {
                   final label = {
                     'LOW': 'Low (96)',
                     'HIGH': 'High (320)',
-                    'LOSSLESS': 'Lossless (FLAC)',
+                    'LOSSLESS': 'Lossless',
                     'HI_RES_LOSSLESS': 'Hi-Res',
                   }[q] ?? q;
                   return ChoiceChip(
@@ -907,24 +1039,120 @@ class _HomePageState extends State<HomePage> {
                     onSelected: (_) {
                       setState(() => _audioQuality = q);
                       setSheetState(() {});
+                      _saveSettings();
                     },
                   );
                 }).toList(),
               ),
+              const Divider(height: 32),
+
+              // Speed range
+              Text('Speed Range', style: theme.textTheme.titleSmall),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: minCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Min %',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                      onSubmitted: (v) {
+                        final val = double.tryParse(v);
+                        if (val != null && val >= 10 && val < _speedMax * 100) {
+                          setState(() => _speedMin = val / 100);
+                          _saveSettings();
+                          setSheetState(() {});
+                        }
+                      },
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    child: Text('—'),
+                  ),
+                  Expanded(
+                    child: TextField(
+                      controller: maxCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Max %',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                      onSubmitted: (v) {
+                        final val = double.tryParse(v);
+                        if (val != null && val > _speedMin * 100 && val <= 300) {
+                          setState(() => _speedMax = val / 100);
+                          _saveSettings();
+                          setSheetState(() {});
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              // Step size
+              Text('Speed Step', style: theme.textTheme.titleSmall),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  ..._stepOptions.map((step) {
+                    return ChoiceChip(
+                      label: Text('${(step * 100).toStringAsFixed(1)}%'),
+                      selected: (_speedStep - step).abs() < 0.001,
+                      onSelected: (_) {
+                        setState(() => _speedStep = step);
+                        stepCtrl.text = (step * 100).toStringAsFixed(1);
+                        _saveSettings();
+                        setSheetState(() {});
+                      },
+                    );
+                  }),
+                  // Custom step input
+                  SizedBox(
+                    width: 80,
+                    child: TextField(
+                      controller: stepCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Custom',
+                        suffixText: '%',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                      onSubmitted: (v) {
+                        final val = double.tryParse(v);
+                        if (val != null && val > 0 && val <= 50) {
+                          setState(() => _speedStep = val / 100);
+                          _saveSettings();
+                          setSheetState(() {});
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(height: 16),
               Text(
                 'Quality affects new downloads only. '
-                'Hi-Res requires a Tidal HiFi Plus subscription.',
+                'Hi-Res requires Tidal HiFi Plus.',
                 style: theme.textTheme.bodySmall
                     ?.copyWith(color: theme.colorScheme.outline),
               ),
-              const SizedBox(height: 8),
-              if (_pythonVersion != null)
-                Text(
-                  'Python $_pythonVersion',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.outline),
-                ),
+              if (_pythonVersion != null) ...[
+                const SizedBox(height: 4),
+                Text('Python $_pythonVersion',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.outline)),
+              ],
               const SizedBox(height: 16),
             ],
           ),

@@ -284,16 +284,29 @@ def download_track(url_or_id, quality="LOSSLESS"):
             from requests import Session as ReqSession
 
             urls, file_ext = parse_track_stream(stream)
-            _write_progress("downloading", 10, f"Downloading ({len(urls)} segments)...")
+            _write_progress("downloading", 10, "Starting download...")
 
+            # Estimate total size from first segment's Content-Length
+            est_total = 0
             stream_data = b""
+            total_bytes = 0
             with ReqSession() as s:
                 for i, url in enumerate(urls):
                     resp = s.get(url, timeout=30)
                     resp.raise_for_status()
-                    stream_data += resp.content
+                    chunk = resp.content
+                    stream_data += chunk
+                    total_bytes += len(chunk)
+                    if i == 0 and len(urls) > 1:
+                        est_total = len(chunk) * len(urls)
                     pct = 10 + int(80 * (i + 1) / len(urls))
-                    _write_progress("downloading", pct, f"Segment {i+1}/{len(urls)}")
+                    mb_done = total_bytes / (1024 * 1024)
+                    if est_total > 0:
+                        mb_total = est_total / (1024 * 1024)
+                        detail = f"{mb_done:.1f} / {mb_total:.0f} MB"
+                    else:
+                        detail = f"{mb_done:.1f} MB"
+                    _write_progress("downloading", pct, detail)
         except ImportError:
             # Fallback: use get_track_stream_data if parse not available
             from tiddl.core.utils.download import get_track_stream_data
