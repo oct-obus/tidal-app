@@ -95,8 +95,10 @@ def check_auth_token(device_code):
         }
         config_path = _get_config_path()
         if config_path:
-            with open(config_path, "w") as f:
+            tmp = config_path + ".tmp"
+            with open(tmp, "w") as f:
                 json.dump(config_data, f, indent=2)
+            os.replace(tmp, config_path)
 
         return _result(True, {
             "token": resp.access_token,
@@ -226,13 +228,15 @@ def get_track_info(url_or_id):
 
 
 def _write_progress(step, pct=0, detail=""):
-    """Write download progress to a file for Dart to poll."""
+    """Write download progress atomically for Dart to poll."""
     try:
         if not DOCUMENTS_DIR:
             return
         progress_path = os.path.join(DOCUMENTS_DIR, ".download_progress.json")
-        with open(progress_path, "w") as f:
+        tmp_path = progress_path + ".tmp"
+        with open(tmp_path, "w") as f:
             json.dump({"step": step, "pct": pct, "detail": detail}, f)
+        os.replace(tmp_path, progress_path)
     except Exception:
         pass
 
@@ -258,6 +262,9 @@ def download_track(url_or_id, quality="LOSSLESS"):
         from tiddl.cli.utils.resource import TidalResource
         from tiddl.core.metadata import add_track_metadata, Cover
 
+        if not DOCUMENTS_DIR:
+            return _result(False, error="Documents directory not set")
+
         _write_progress("lookup", 0, "Looking up track...")
 
         api = _get_tidal_api()
@@ -282,7 +289,9 @@ def download_track(url_or_id, quality="LOSSLESS"):
             stream_data = b""
             with ReqSession() as s:
                 for i, url in enumerate(urls):
-                    stream_data += s.get(url).content
+                    resp = s.get(url, timeout=30)
+                    resp.raise_for_status()
+                    stream_data += resp.content
                     pct = 10 + int(80 * (i + 1) / len(urls))
                     _write_progress("downloading", pct, f"Segment {i+1}/{len(urls)}")
         except ImportError:
@@ -296,11 +305,23 @@ def download_track(url_or_id, quality="LOSSLESS"):
         download_dir = os.path.join(DOCUMENTS_DIR, "downloads")
         os.makedirs(download_dir, exist_ok=True)
 
+        # Include track ID in filename to prevent collisions
         safe_name = "".join(c for c in f"{artist_name} - {track.title}" if c.isalnum() or c in " -_.")
-        file_path = os.path.join(download_dir, f"{safe_name}{file_ext}")
+        file_path = os.path.join(download_dir, f"{safe_name} [{resource.id}]{file_ext}")
 
-        with open(file_path, "wb") as f:
-            f.write(stream_data)
+        # Atomic write: temp file + rename
+        tmp_path = file_path + ".tmp"
+        try:
+            with open(tmp_path, "wb") as f:
+                f.write(stream_data)
+            os.replace(tmp_path, file_path)
+        except Exception:
+            # Clean up partial temp file on failure
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
 
         try:
             from pathlib import Path
@@ -343,7 +364,7 @@ def list_downloads():
         songs = []
         for fname in sorted(os.listdir(download_dir)):
             fpath = os.path.join(download_dir, fname)
-            if os.path.isfile(fpath) and not fname.startswith('.'):
+            if os.path.isfile(fpath) and not fname.startswith('.') and not fname.endswith('.tmp'):
                 size_mb = os.path.getsize(fpath) / (1024 * 1024)
                 songs.append({
                     "fileName": fname,

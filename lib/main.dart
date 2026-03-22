@@ -85,7 +85,7 @@ class _HomePageState extends State<HomePage> {
   void _startPlayerStatePolling() {
     _playerStateTimer?.cancel();
     _playerStateTimer =
-        Timer.periodic(const Duration(milliseconds: 500), (_) async {
+        Timer.periodic(const Duration(seconds: 1), (_) async {
       try {
         final state =
             await _audioChannel.invokeMapMethod<String, dynamic>('getState');

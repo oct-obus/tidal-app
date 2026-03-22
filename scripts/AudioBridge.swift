@@ -7,7 +7,6 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
     static let shared = AudioBridgePlugin()
     private var player: AVPlayer?
     private var timeObserver: Any?
-    private var statusObservation: NSKeyValueObservation?
     private var endObserver: NSObjectProtocol?
     private var stateChannel: FlutterMethodChannel?
 
@@ -44,24 +43,28 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
         let center = MPRemoteCommandCenter.shared()
 
         center.playCommand.addTarget { [weak self] _ in
-            self?.resumePlayback()
+            DispatchQueue.main.async { self?.resumePlayback() }
             return .success
         }
         center.pauseCommand.addTarget { [weak self] _ in
-            self?.pausePlayback()
+            DispatchQueue.main.async { self?.pausePlayback() }
             return .success
         }
         center.togglePlayPauseCommand.addTarget { [weak self] _ in
-            if self?.isPlaying == true {
-                self?.pausePlayback()
-            } else {
-                self?.resumePlayback()
+            DispatchQueue.main.async {
+                if self?.isPlaying == true {
+                    self?.pausePlayback()
+                } else {
+                    self?.resumePlayback()
+                }
             }
             return .success
         }
         center.changePlaybackPositionCommand.addTarget { [weak self] event in
             if let event = event as? MPChangePlaybackPositionCommandEvent {
-                self?.seekTo(seconds: event.positionTime)
+                DispatchQueue.main.async {
+                    self?.seekTo(seconds: event.positionTime)
+                }
             }
             return .success
         }
@@ -188,8 +191,8 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
 
     private func seekTo(seconds: Double) {
         let time = CMTime(seconds: seconds, preferredTimescale: 1000)
-        player?.seek(to: time) { [weak self] _ in
-            self?.updateNowPlayingInfo()
+        player?.seek(to: time) { [weak self] finished in
+            if finished { self?.updateNowPlayingInfo() }
         }
     }
 
@@ -226,7 +229,5 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
             p.removeTimeObserver(observer)
             timeObserver = nil
         }
-        statusObservation?.invalidate()
-        statusObservation = nil
     }
 }
