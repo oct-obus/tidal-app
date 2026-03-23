@@ -448,6 +448,140 @@ def delete_download(file_path):
         return _result(False, error=str(e))
 
 
+def _get_playlists_path():
+    if DOCUMENTS_DIR:
+        return os.path.join(DOCUMENTS_DIR, "playlists.json")
+    return None
+
+
+def get_playlist_info(url_or_id):
+    """Fetch playlist metadata and all tracks from Tidal."""
+    try:
+        from tiddl.cli.utils.resource import TidalResource
+
+        api = _get_tidal_api()
+        resource = TidalResource.from_string(url_or_id)
+        if resource.type != "playlist":
+            return _result(False, error=f"Not a playlist URL, got: {resource.type}")
+
+        playlist = api.get_playlist(resource.id)
+
+        # Paginate through all tracks
+        tracks = []
+        offset = 0
+        limit = 100
+        total = playlist.numberOfTracks
+        while offset < total:
+            items_page = api.get_playlist_items(resource.id, limit=limit, offset=offset)
+            for entry in items_page.items:
+                if getattr(entry, "type", None) != "track":
+                    continue
+                t = entry.item
+                tracks.append({
+                    "trackId": t.id,
+                    "title": t.title,
+                    "artist": t.artist.name if t.artist else "Unknown",
+                    "album": t.album.title if t.album else "Unknown",
+                    "duration": t.duration,
+                    "quality": t.audioQuality if hasattr(t, "audioQuality") else None,
+                    "explicit": getattr(t, "explicit", False),
+                    "index": getattr(t, "index", offset + len(tracks)),
+                })
+            offset += limit
+
+        return _result(True, {
+            "uuid": playlist.uuid,
+            "title": playlist.title,
+            "description": getattr(playlist, "description", None),
+            "numberOfTracks": playlist.numberOfTracks,
+            "duration": playlist.duration,
+            "lastUpdated": getattr(playlist, "lastUpdated", None),
+            "tracks": tracks,
+        })
+    except Exception as e:
+        logger.error(f"Playlist info error: {e}\n{traceback.format_exc()}")
+        return _result(False, error=str(e))
+
+
+def list_playlists():
+    """Read saved playlists from playlists.json."""
+    try:
+        path = _get_playlists_path()
+        if not path or not os.path.exists(path):
+            return _result(True, {"playlists": []})
+        with open(path) as f:
+            data = json.load(f)
+        return _result(True, {"playlists": data if isinstance(data, list) else []})
+    except Exception as e:
+        logger.error(f"List playlists error: {e}")
+        return _result(False, error=str(e))
+
+
+def save_playlist(playlist_json):
+    """Save or update a playlist in playlists.json."""
+    try:
+        playlist = json.loads(playlist_json) if isinstance(playlist_json, str) else playlist_json
+        uuid = playlist.get("uuid")
+        if not uuid:
+            return _result(False, error="Playlist missing uuid")
+
+        path = _get_playlists_path()
+        if not path:
+            return _result(False, error="Documents directory not set")
+
+        playlists = []
+        if os.path.exists(path):
+            with open(path) as f:
+                playlists = json.load(f)
+            if not isinstance(playlists, list):
+                playlists = []
+
+        # Replace existing or append
+        found = False
+        for i, p in enumerate(playlists):
+            if p.get("uuid") == uuid:
+                playlists[i] = playlist
+                found = True
+                break
+        if not found:
+            playlists.append(playlist)
+
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(playlists, f, indent=2)
+        os.replace(tmp, path)
+
+        return _result(True, {"saved": True})
+    except Exception as e:
+        logger.error(f"Save playlist error: {e}\n{traceback.format_exc()}")
+        return _result(False, error=str(e))
+
+
+def remove_playlist(uuid):
+    """Remove a playlist from playlists.json."""
+    try:
+        path = _get_playlists_path()
+        if not path or not os.path.exists(path):
+            return _result(True, {"removed": True})
+
+        with open(path) as f:
+            playlists = json.load(f)
+        if not isinstance(playlists, list):
+            return _result(True, {"removed": True})
+
+        playlists = [p for p in playlists if p.get("uuid") != uuid]
+
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(playlists, f, indent=2)
+        os.replace(tmp, path)
+
+        return _result(True, {"removed": True})
+    except Exception as e:
+        logger.error(f"Remove playlist error: {e}\n{traceback.format_exc()}")
+        return _result(False, error=str(e))
+
+
 if __name__ == "__main__":
     print("tiddl_bridge loaded successfully")
     print(f"Python {sys.version}")

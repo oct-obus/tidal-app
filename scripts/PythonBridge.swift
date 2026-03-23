@@ -241,6 +241,44 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(response)
             }
 
+        case "getPlaylistInfo":
+            guard let args = call.arguments as? [String: Any],
+                  let url = args["url"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'url'", details: nil))
+                return
+            }
+            let safeUrl = bridge.pythonEscape(url)
+            bridge.runWithResult("tiddl_bridge.get_playlist_info('\(safeUrl)')") { response in
+                result(response)
+            }
+
+        case "listPlaylists":
+            bridge.runWithResult("tiddl_bridge.list_playlists()") { response in
+                result(response)
+            }
+
+        case "savePlaylist":
+            guard let args = call.arguments as? [String: Any],
+                  let jsonStr = args["json"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'json'", details: nil))
+                return
+            }
+            let safeJson = bridge.pythonEscape(jsonStr)
+            bridge.runWithResult("tiddl_bridge.save_playlist('\(safeJson)')") { response in
+                result(response)
+            }
+
+        case "removePlaylist":
+            guard let args = call.arguments as? [String: Any],
+                  let uuid = args["uuid"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'uuid'", details: nil))
+                return
+            }
+            let safeUuid = bridge.pythonEscape(uuid)
+            bridge.runWithResult("tiddl_bridge.remove_playlist('\(safeUuid)')") { response in
+                result(response)
+            }
+
         case "getTrackInfo":
             guard let args = call.arguments as? [String: Any],
                   let url = args["url"] as? String else {

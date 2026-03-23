@@ -4,6 +4,7 @@ import 'managers/auth_manager.dart';
 import 'managers/playback_manager.dart';
 import 'managers/library_manager.dart';
 import 'managers/settings_manager.dart';
+import 'managers/playlist_manager.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -41,15 +42,23 @@ class _HomePageState extends State<HomePage> {
   final _playback = PlaybackManager();
   final _library = LibraryManager();
   final _settings = SettingsManager();
+  final _playlist = PlaylistManager();
+
+  int _tabIndex = 0;
+  bool _viewingPlaylistDetail = false;
 
   @override
   void initState() {
     super.initState();
-    _auth.onAuthenticated = () => _library.loadLibrary();
+    _auth.onAuthenticated = () {
+      _library.loadLibrary();
+      _playlist.loadSavedPlaylists();
+    };
     _auth.addListener(_onManagerChanged);
     _playback.addListener(_onManagerChanged);
     _library.addListener(_onManagerChanged);
     _settings.addListener(_onManagerChanged);
+    _playlist.addListener(_onManagerChanged);
     _playback.setupAudioCallbacks();
     _init();
   }
@@ -71,10 +80,12 @@ class _HomePageState extends State<HomePage> {
     _playback.removeListener(_onManagerChanged);
     _library.removeListener(_onManagerChanged);
     _settings.removeListener(_onManagerChanged);
+    _playlist.removeListener(_onManagerChanged);
     _auth.dispose();
     _playback.dispose();
     _library.dispose();
     _settings.dispose();
+    _playlist.dispose();
     super.dispose();
   }
 
@@ -120,6 +131,27 @@ class _HomePageState extends State<HomePage> {
     _library.clearLibrary();
   }
 
+  bool _isPlaylistUrl(String url) {
+    return url.contains('/playlist/') || url.startsWith('playlist/');
+  }
+
+  Future<void> _handleUrlSubmit() async {
+    final url = _urlController.text.trim();
+    if (url.isEmpty) return;
+
+    if (_isPlaylistUrl(url)) {
+      await _playlist.fetchPlaylist(url);
+      if (_playlist.currentPlaylist != null) {
+        _urlController.clear();
+        _tabIndex = 1;
+        _viewingPlaylistDetail = true;
+        setState(() {});
+      }
+    } else {
+      await _download();
+    }
+  }
+
   Future<void> _download() async {
     final url = _urlController.text.trim();
     if (url.isEmpty) return;
@@ -130,6 +162,17 @@ class _HomePageState extends State<HomePage> {
       _playback.trackArtist = result['artist'] as String?;
       _playback.trackAlbum = result['album'] as String?;
       _urlController.clear();
+    }
+  }
+
+  Future<void> _downloadTrackFromPlaylist(Map<String, dynamic> track) async {
+    final trackId = track['trackId'];
+    final result = await _library.download(
+        'track/$trackId', _settings.audioQuality);
+    if (result != null) {
+      _playback.trackTitle = result['title'] as String?;
+      _playback.trackArtist = result['artist'] as String?;
+      _playback.trackAlbum = result['album'] as String?;
     }
   }
 
@@ -157,9 +200,36 @@ class _HomePageState extends State<HomePage> {
 
   String _formatDuration(double seconds) {
     if (seconds <= 0 || seconds.isInfinite || seconds.isNaN) return '0:00';
-    final m = seconds ~/ 60;
+    final h = seconds ~/ 3600;
+    final m = (seconds % 3600) ~/ 60;
     final s = (seconds % 60).toInt();
+    if (h > 0) {
+      return '$h:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+    }
     return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  String _formatTrackDuration(dynamic seconds) {
+    if (seconds == null) return '-';
+    final total = (seconds as num).toInt();
+    final h = total ~/ 3600;
+    final m = (total % 3600) ~/ 60;
+    final s = total % 60;
+    if (h > 0) {
+      return '$h:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+    }
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  Set<int> _getDownloadedTrackIds() {
+    final ids = <int>{};
+    for (final song in _library.library) {
+      final meta = song['meta'] as Map<String, dynamic>?;
+      if (meta != null && meta['trackId'] != null) {
+        ids.add((meta['trackId'] as num).toInt());
+      }
+    }
+    return ids;
   }
 
   @override
@@ -190,10 +260,109 @@ class _HomePageState extends State<HomePage> {
         children: [
           Expanded(
             child: _auth.isAuthenticated
-                ? _buildMainContent(theme)
+                ? _buildAuthenticatedContent(theme)
                 : _buildAuthContent(theme),
           ),
           if (_playback.currentFilePath != null) _buildNowPlayingBar(theme),
+        ],
+      ),
+      bottomNavigationBar: _auth.isAuthenticated
+          ? NavigationBar(
+              selectedIndex: _tabIndex,
+              onDestinationSelected: (i) {
+                setState(() {
+                  _tabIndex = i;
+                  if (i != 1) _viewingPlaylistDetail = false;
+                });
+              },
+              destinations: const [
+                NavigationDestination(
+                    icon: Icon(Icons.library_music), label: 'Library'),
+                NavigationDestination(
+                    icon: Icon(Icons.queue_music), label: 'Playlists'),
+              ],
+            )
+          : null,
+    );
+  }
+
+  Widget _buildAuthenticatedContent(ThemeData theme) {
+    return Column(
+      children: [
+        _buildUrlInput(theme),
+        if (_library.isDownloading)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Column(
+              children: [
+                LinearProgressIndicator(
+                    value: _library.downloadProgress > 0
+                        ? _library.downloadProgress
+                        : null),
+                const SizedBox(height: 4),
+                Text(_library.downloadStep,
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.outline)),
+              ],
+            ),
+          ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: _tabIndex == 0
+              ? _buildLibraryTab(theme)
+              : _viewingPlaylistDetail
+                  ? _buildPlaylistDetailView(theme)
+                  : _buildPlaylistsTab(theme),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildUrlInput(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _urlController,
+              enabled: !_library.isDownloading,
+              decoration: InputDecoration(
+                labelText: 'Tidal URL',
+                hintText: 'Track or playlist URL',
+                border: const OutlineInputBorder(),
+                prefixIcon: const Icon(Icons.link),
+                isDense: true,
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.paste, size: 20),
+                  onPressed: _library.isDownloading
+                      ? null
+                      : () async {
+                          final data =
+                              await Clipboard.getData('text/plain');
+                          if (data?.text != null) {
+                            _urlController.text = data!.text!;
+                          }
+                        },
+                ),
+              ),
+              keyboardType: TextInputType.url,
+              onSubmitted: (_) => _handleUrlSubmit(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilledButton(
+            onPressed:
+                (_library.isDownloading || _playlist.isLoading)
+                    ? null
+                    : _handleUrlSubmit,
+            child: (_library.isDownloading || _playlist.isLoading)
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.download),
+          ),
         ],
       ),
     );
@@ -280,165 +449,345 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildMainContent(ThemeData theme) {
+  Widget _buildLibraryTab(ThemeData theme) {
+    if (_library.library.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.library_music,
+                size: 64,
+                color: theme.colorScheme.outline.withOpacity(0.3)),
+            const SizedBox(height: 12),
+            Text('No songs yet',
+                style: theme.textTheme.bodyLarge
+                    ?.copyWith(color: theme.colorScheme.outline)),
+            Text('Paste a Tidal URL above to download',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.outline)),
+          ],
+        ),
+      );
+    }
+    return ListView.builder(
+      itemCount: _library.library.length,
+      itemBuilder: (ctx, i) {
+        final song = _library.library[i];
+        final filePath = song['filePath'] as String;
+        final fileName = song['fileName'] as String;
+        final sizeMB = song['sizeMB'] as num;
+        final isActive = _playback.currentFilePath == filePath;
+        final name = LibraryManager.displayName(fileName);
+
+        return Dismissible(
+          key: Key(filePath),
+          direction: DismissDirection.endToStart,
+          background: Container(
+            color: Colors.red,
+            alignment: Alignment.centerRight,
+            padding: const EdgeInsets.only(right: 16),
+            child: const Icon(Icons.delete, color: Colors.white),
+          ),
+          confirmDismiss: (_) async {
+            return await showDialog<bool>(
+              context: ctx,
+              builder: (c) => AlertDialog(
+                title: const Text('Delete song?'),
+                content: Text('Delete "$name"?'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(c, false),
+                      child: const Text('Cancel')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(c, true),
+                      child: const Text('Delete')),
+                ],
+              ),
+            );
+          },
+          onDismissed: (_) => _deleteSong(filePath),
+          child: ListTile(
+            leading: Icon(
+              isActive && _playback.isPlaying
+                  ? Icons.equalizer
+                  : Icons.music_note,
+              color: isActive ? theme.colorScheme.primary : null,
+            ),
+            title: Text(name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: isActive
+                    ? TextStyle(
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.bold)
+                    : null),
+            subtitle: Text('${sizeMB.toStringAsFixed(1)} MB'),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.play_arrow, size: 22),
+                  tooltip: 'Play',
+                  onPressed: () => _playSong(filePath, title: name),
+                  visualDensity: VisualDensity.compact,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.info_outline, size: 22),
+                  tooltip: 'Song info',
+                  onPressed: () => _showSongInfoSheet(theme, song),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            ),
+            onTap: () => _playSong(filePath, title: name),
+            dense: true,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPlaylistsTab(ThemeData theme) {
+    if (_playlist.savedPlaylists.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.queue_music,
+                size: 64,
+                color: theme.colorScheme.outline.withOpacity(0.3)),
+            const SizedBox(height: 12),
+            Text('No playlists saved',
+                style: theme.textTheme.bodyLarge
+                    ?.copyWith(color: theme.colorScheme.outline)),
+            Text('Paste a Tidal playlist URL above',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.outline)),
+          ],
+        ),
+      );
+    }
+    return ListView.builder(
+      itemCount: _playlist.savedPlaylists.length,
+      itemBuilder: (ctx, i) {
+        final pl = _playlist.savedPlaylists[i];
+        final title = pl['title'] as String? ?? 'Untitled';
+        final trackCount = pl['numberOfTracks'] as int? ?? 0;
+        final totalDuration = pl['duration'] as int? ?? 0;
+
+        return Dismissible(
+          key: Key(pl['uuid'] as String),
+          direction: DismissDirection.endToStart,
+          background: Container(
+            color: Colors.red,
+            alignment: Alignment.centerRight,
+            padding: const EdgeInsets.only(right: 16),
+            child: const Icon(Icons.delete, color: Colors.white),
+          ),
+          confirmDismiss: (_) async {
+            return await showDialog<bool>(
+              context: ctx,
+              builder: (c) => AlertDialog(
+                title: const Text('Remove playlist?'),
+                content: Text('Remove "$title" from saved playlists?'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(c, false),
+                      child: const Text('Cancel')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(c, true),
+                      child: const Text('Remove')),
+                ],
+              ),
+            );
+          },
+          onDismissed: (_) => _playlist.removePlaylist(pl['uuid'] as String),
+          child: ListTile(
+            leading: const Icon(Icons.queue_music),
+            title: Text(title,
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+            subtitle: Text(
+                '$trackCount tracks · ${_formatTrackDuration(totalDuration)}'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              _playlist.currentPlaylist = Map<String, dynamic>.from(pl);
+              _viewingPlaylistDetail = true;
+              _playlist.notifyListeners();
+              setState(() {});
+            },
+            dense: true,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPlaylistDetailView(ThemeData theme) {
+    final pl = _playlist.currentPlaylist;
+    if (pl == null) {
+      return Center(
+        child: _playlist.isLoading
+            ? const CircularProgressIndicator()
+            : Text(_playlist.error ?? 'No playlist loaded',
+                style: theme.textTheme.bodyLarge
+                    ?.copyWith(color: theme.colorScheme.error)),
+      );
+    }
+
+    final title = pl['title'] as String? ?? 'Untitled';
+    final trackCount = pl['numberOfTracks'] as int? ?? 0;
+    final totalDuration = pl['duration'] as int? ?? 0;
+    final description = pl['description'] as String?;
+    final tracks =
+        (pl['tracks'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    final uuid = pl['uuid'] as String;
+    final isSaved = _playlist.isSaved(uuid);
+    final downloadedIds = _getDownloadedTrackIds();
+
     return Column(
       children: [
+        // Header
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          padding: const EdgeInsets.fromLTRB(16, 4, 8, 0),
           child: Row(
             children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () {
+                  setState(() {
+                    _viewingPlaylistDetail = false;
+                    _playlist.clearCurrent();
+                  });
+                },
+                tooltip: 'Back',
+                visualDensity: VisualDensity.compact,
+              ),
+              const SizedBox(width: 4),
               Expanded(
-                child: TextField(
-                  controller: _urlController,
-                  enabled: !_library.isDownloading,
-                  decoration: InputDecoration(
-                    labelText: 'Tidal URL',
-                    hintText: 'https://tidal.com/browse/track/...',
-                    border: const OutlineInputBorder(),
-                    prefixIcon: const Icon(Icons.link),
-                    isDense: true,
-                    suffixIcon: IconButton(
-                      icon: const Icon(Icons.paste, size: 20),
-                      onPressed: _library.isDownloading
-                          ? null
-                          : () async {
-                              final data =
-                                  await Clipboard.getData('text/plain');
-                              if (data?.text != null) {
-                                _urlController.text = data!.text!;
-                              }
-                            },
-                    ),
-                  ),
-                  keyboardType: TextInputType.url,
-                  onSubmitted: (_) => _download(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: theme.textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                    Text(
+                        '$trackCount tracks · ${_formatTrackDuration(totalDuration)}',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: theme.colorScheme.outline)),
+                  ],
                 ),
               ),
-              const SizedBox(width: 8),
-              FilledButton(
-                onPressed:
-                    (_library.isDownloading || _urlController.text.trim().isEmpty)
-                        ? null
-                        : _download,
-                child: _library.isDownloading
+              IconButton(
+                icon: _playlist.isLoading
                     ? const SizedBox(
                         width: 20,
                         height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.download),
+                    : const Icon(Icons.refresh),
+                onPressed:
+                    _playlist.isLoading ? null : () => _playlist.refreshPlaylist(uuid),
+                tooltip: 'Refresh',
+                visualDensity: VisualDensity.compact,
+              ),
+              IconButton(
+                icon: Icon(isSaved ? Icons.bookmark : Icons.bookmark_border),
+                onPressed: () async {
+                  if (isSaved) {
+                    await _playlist.removePlaylist(uuid);
+                  } else {
+                    await _playlist.savePlaylist(pl);
+                  }
+                },
+                tooltip: isSaved ? 'Remove from saved' : 'Save playlist',
+                visualDensity: VisualDensity.compact,
               ),
             ],
           ),
         ),
-        if (_library.isDownloading)
+        if (description != null && description.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            child: Column(
-              children: [
-                LinearProgressIndicator(
-                    value: _library.downloadProgress > 0
-                        ? _library.downloadProgress
-                        : null),
-                const SizedBox(height: 4),
-                Text(_library.downloadStep,
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.outline)),
-              ],
+            padding: const EdgeInsets.fromLTRB(56, 0, 16, 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(description,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.outline),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis),
             ),
           ),
-        const SizedBox(height: 8),
+        if (_playlist.error != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+            child: Text(_playlist.error!,
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.error)),
+          ),
+        const Divider(height: 1),
+        // Track list
         Expanded(
-          child: _library.library.isEmpty
+          child: tracks.isEmpty
               ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.library_music,
-                          size: 64,
-                          color: theme.colorScheme.outline.withOpacity(0.3)),
-                      const SizedBox(height: 12),
-                      Text('No songs yet',
-                          style: theme.textTheme.bodyLarge
-                              ?.copyWith(color: theme.colorScheme.outline)),
-                      Text('Paste a Tidal URL above to download',
-                          style: theme.textTheme.bodySmall
-                              ?.copyWith(color: theme.colorScheme.outline)),
-                    ],
-                  ),
-                )
+                  child: Text('No tracks',
+                      style: theme.textTheme.bodyLarge
+                          ?.copyWith(color: theme.colorScheme.outline)))
               : ListView.builder(
-                  itemCount: _library.library.length,
+                  itemCount: tracks.length,
                   itemBuilder: (ctx, i) {
-                    final song = _library.library[i];
-                    final filePath = song['filePath'] as String;
-                    final fileName = song['fileName'] as String;
-                    final sizeMB = song['sizeMB'] as num;
-                    final isActive = _playback.currentFilePath == filePath;
-                    final name = LibraryManager.displayName(fileName);
+                    final track = tracks[i];
+                    final trackTitle =
+                        track['title'] as String? ?? 'Unknown';
+                    final artist =
+                        track['artist'] as String? ?? 'Unknown';
+                    final duration = track['duration'];
+                    final trackId = (track['trackId'] as num?)?.toInt() ?? 0;
+                    final isExplicit = track['explicit'] == true;
+                    final isDownloaded = downloadedIds.contains(trackId);
 
-                    return Dismissible(
-                      key: Key(filePath),
-                      direction: DismissDirection.endToStart,
-                      background: Container(
-                        color: Colors.red,
-                        alignment: Alignment.centerRight,
-                        padding: const EdgeInsets.only(right: 16),
-                        child: const Icon(Icons.delete, color: Colors.white),
+                    return ListTile(
+                      leading: SizedBox(
+                        width: 28,
+                        child: Center(
+                          child: Text('${i + 1}',
+                              style: theme.textTheme.bodySmall
+                                  ?.copyWith(
+                                      color: theme.colorScheme.outline)),
+                        ),
                       ),
-                      confirmDismiss: (_) async {
-                        return await showDialog<bool>(
-                          context: ctx,
-                          builder: (c) => AlertDialog(
-                            title: const Text('Delete song?'),
-                            content: Text('Delete "$name"?'),
-                            actions: [
-                              TextButton(
-                                  onPressed: () => Navigator.pop(c, false),
-                                  child: const Text('Cancel')),
-                              FilledButton(
-                                  onPressed: () => Navigator.pop(c, true),
-                                  child: const Text('Delete')),
-                            ],
+                      title: Row(
+                        children: [
+                          Expanded(
+                            child: Text(trackTitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis),
                           ),
-                        );
-                      },
-                      onDismissed: (_) => _deleteSong(filePath),
-                      child: ListTile(
-                        leading: Icon(
-                          isActive && _playback.isPlaying
-                              ? Icons.equalizer
-                              : Icons.music_note,
-                          color: isActive ? theme.colorScheme.primary : null,
-                        ),
-                        title: Text(name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: isActive
-                                ? TextStyle(
-                                    color: theme.colorScheme.primary,
-                                    fontWeight: FontWeight.bold)
-                                : null),
-                        subtitle: Text('${sizeMB.toStringAsFixed(1)} MB'),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.play_arrow, size: 22),
-                              tooltip: 'Play',
-                              onPressed: () => _playSong(filePath, title: name),
-                              visualDensity: VisualDensity.compact,
+                          if (isExplicit)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 4),
+                              child: Icon(Icons.explicit,
+                                  size: 16,
+                                  color: theme.colorScheme.outline),
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.info_outline, size: 22),
-                              tooltip: 'Song info',
-                              onPressed: () => _showSongInfoSheet(theme, song),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                          ],
-                        ),
-                        onTap: () => _playSong(filePath, title: name),
-                        dense: true,
+                        ],
                       ),
+                      subtitle: Text(
+                          '$artist · ${_formatTrackDuration(duration)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
+                      trailing: isDownloaded
+                          ? Icon(Icons.check_circle,
+                              color: theme.colorScheme.primary, size: 22)
+                          : IconButton(
+                              icon: const Icon(Icons.download, size: 22),
+                              onPressed: _library.isDownloading
+                                  ? null
+                                  : () => _downloadTrackFromPlaylist(track),
+                              tooltip: 'Download',
+                              visualDensity: VisualDensity.compact,
+                            ),
+                      dense: true,
                     );
                   },
                 ),
