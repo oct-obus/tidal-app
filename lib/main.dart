@@ -4,6 +4,7 @@ import 'managers/auth_manager.dart';
 import 'managers/playback_manager.dart';
 import 'managers/library_manager.dart';
 import 'managers/settings_manager.dart';
+import 'managers/search_manager.dart';
 import 'managers/playlist_manager.dart';
 
 void main() {
@@ -37,12 +38,13 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final _urlController = TextEditingController();
   final _auth = AuthManager();
   final _playback = PlaybackManager();
   final _library = LibraryManager();
   final _settings = SettingsManager();
   final _playlist = PlaylistManager();
+  final _search = SearchManager();
+  final _searchController = TextEditingController();
 
   int _tabIndex = 0;
   bool _viewingPlaylistDetail = false;
@@ -59,6 +61,7 @@ class _HomePageState extends State<HomePage> {
     _library.addListener(_onManagerChanged);
     _settings.addListener(_onManagerChanged);
     _playlist.addListener(_onManagerChanged);
+    _search.addListener(_onManagerChanged);
     _playback.setupAudioCallbacks();
     _init();
   }
@@ -75,17 +78,19 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
-    _urlController.dispose();
+    _searchController.dispose();
     _auth.removeListener(_onManagerChanged);
     _playback.removeListener(_onManagerChanged);
     _library.removeListener(_onManagerChanged);
     _settings.removeListener(_onManagerChanged);
     _playlist.removeListener(_onManagerChanged);
+    _search.removeListener(_onManagerChanged);
     _auth.dispose();
     _playback.dispose();
     _library.dispose();
     _settings.dispose();
     _playlist.dispose();
+    _search.dispose();
     super.dispose();
   }
 
@@ -135,33 +140,37 @@ class _HomePageState extends State<HomePage> {
     return url.contains('/playlist/') || url.startsWith('playlist/');
   }
 
-  Future<void> _handleUrlSubmit() async {
-    final url = _urlController.text.trim();
-    if (url.isEmpty) return;
-
-    if (_isPlaylistUrl(url)) {
-      await _playlist.fetchPlaylist(url);
-      if (_playlist.currentPlaylist != null) {
-        _urlController.clear();
-        _tabIndex = 1;
-        _viewingPlaylistDetail = true;
-        setState(() {});
-      }
-    } else {
-      await _download();
-    }
+  bool _isDirectUrl(String input) {
+    return input.contains('tidal.com') ||
+        input.startsWith('track/') ||
+        input.startsWith('playlist/');
   }
 
-  Future<void> _download() async {
-    final url = _urlController.text.trim();
-    if (url.isEmpty) return;
+  Future<void> _handleSearchSubmit() async {
+    final input = _searchController.text.trim();
+    if (input.isEmpty) return;
 
-    final result = await _library.download(url, _settings.audioQuality);
-    if (result != null) {
-      _playback.trackTitle = result['title'] as String?;
-      _playback.trackArtist = result['artist'] as String?;
-      _playback.trackAlbum = result['album'] as String?;
-      _urlController.clear();
+    if (_isDirectUrl(input)) {
+      if (_isPlaylistUrl(input)) {
+        await _playlist.fetchPlaylist(input);
+        if (_playlist.currentPlaylist != null) {
+          _searchController.clear();
+          _tabIndex = 2;
+          _viewingPlaylistDetail = true;
+          setState(() {});
+        }
+      } else {
+        // Direct track URL — download it
+        final result = await _library.download(input, _settings.audioQuality);
+        if (result != null) {
+          _playback.trackTitle = result['title'] as String?;
+          _playback.trackArtist = result['artist'] as String?;
+          _playback.trackAlbum = result['album'] as String?;
+          _searchController.clear();
+        }
+      }
+    } else {
+      await _search.search(input);
     }
   }
 
@@ -272,12 +281,14 @@ class _HomePageState extends State<HomePage> {
               onDestinationSelected: (i) {
                 setState(() {
                   _tabIndex = i;
-                  if (i != 1) _viewingPlaylistDetail = false;
+                  if (i != 2) _viewingPlaylistDetail = false;
                 });
               },
               destinations: const [
                 NavigationDestination(
                     icon: Icon(Icons.library_music), label: 'Library'),
+                NavigationDestination(
+                    icon: Icon(Icons.search), label: 'Search'),
                 NavigationDestination(
                     icon: Icon(Icons.queue_music), label: 'Playlists'),
               ],
@@ -289,7 +300,6 @@ class _HomePageState extends State<HomePage> {
   Widget _buildAuthenticatedContent(ThemeData theme) {
     return Column(
       children: [
-        _buildUrlInput(theme),
         if (_library.isDownloading)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -306,66 +316,237 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           ),
-        const SizedBox(height: 8),
         Expanded(
           child: _tabIndex == 0
               ? _buildLibraryTab(theme)
-              : _viewingPlaylistDetail
-                  ? _buildPlaylistDetailView(theme)
-                  : _buildPlaylistsTab(theme),
+              : _tabIndex == 1
+                  ? _buildSearchTab(theme)
+                  : _viewingPlaylistDetail
+                      ? _buildPlaylistDetailView(theme)
+                      : _buildPlaylistsTab(theme),
         ),
       ],
     );
   }
 
-  Widget _buildUrlInput(ThemeData theme) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _urlController,
-              enabled: !_library.isDownloading,
-              decoration: InputDecoration(
-                labelText: 'Tidal URL',
-                hintText: 'Track or playlist URL',
-                border: const OutlineInputBorder(),
-                prefixIcon: const Icon(Icons.link),
-                isDense: true,
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.paste, size: 20),
-                  onPressed: _library.isDownloading
-                      ? null
-                      : () async {
-                          final data =
-                              await Clipboard.getData('text/plain');
-                          if (data?.text != null) {
-                            _urlController.text = data!.text!;
-                          }
-                        },
-                ),
+  Widget _buildSearchTab(ThemeData theme) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: TextField(
+            controller: _searchController,
+            enabled: !_search.isSearching && !_library.isDownloading,
+            decoration: InputDecoration(
+              hintText: 'Search tracks, albums, playlists or paste URL...',
+              border: const OutlineInputBorder(),
+              prefixIcon: const Icon(Icons.search),
+              isDense: true,
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_searchController.text.isNotEmpty)
+                    IconButton(
+                      icon: const Icon(Icons.clear, size: 20),
+                      onPressed: () {
+                        _searchController.clear();
+                        _search.clear();
+                      },
+                    ),
+                  IconButton(
+                    icon: const Icon(Icons.paste, size: 20),
+                    onPressed: (_search.isSearching || _library.isDownloading)
+                        ? null
+                        : () async {
+                            final data =
+                                await Clipboard.getData('text/plain');
+                            if (data?.text != null) {
+                              _searchController.text = data!.text!;
+                            }
+                          },
+                  ),
+                ],
               ),
-              keyboardType: TextInputType.url,
-              onSubmitted: (_) => _handleUrlSubmit(),
+            ),
+            onSubmitted: (_) => _handleSearchSubmit(),
+            onChanged: (_) => setState(() {}),
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (_search.isSearching)
+          const Padding(
+            padding: EdgeInsets.all(32),
+            child: CircularProgressIndicator(),
+          )
+        else if (_search.error != null)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(_search.error!,
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: theme.colorScheme.error)),
+          )
+        else if (_search.hasResults)
+          Expanded(child: _buildSearchResults(theme))
+        else if (_search.lastQuery.isNotEmpty)
+          Expanded(
+            child: Center(
+              child: Text('No results for "${_search.lastQuery}"',
+                  style: theme.textTheme.bodyLarge
+                      ?.copyWith(color: theme.colorScheme.outline)),
+            ),
+          )
+        else
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.search,
+                      size: 64,
+                      color: theme.colorScheme.outline.withOpacity(0.3)),
+                  const SizedBox(height: 12),
+                  Text('Search Tidal',
+                      style: theme.textTheme.bodyLarge
+                          ?.copyWith(color: theme.colorScheme.outline)),
+                  Text('Find tracks, albums, and playlists',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.outline)),
+                ],
+              ),
             ),
           ),
-          const SizedBox(width: 8),
-          FilledButton(
-            onPressed:
-                (_library.isDownloading || _playlist.isLoading)
-                    ? null
-                    : _handleUrlSubmit,
-            child: (_library.isDownloading || _playlist.isLoading)
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.download),
+      ],
+    );
+  }
+
+  Widget _buildSearchResults(ThemeData theme) {
+    final downloadedIds = _getDownloadedTrackIds();
+    return ListView(
+      children: [
+        if (_search.tracks.isNotEmpty) ...[
+          _buildSectionHeader(
+              theme, 'Tracks', _search.tracks.length),
+          ..._search.tracks.map(
+              (track) => _buildSearchTrackTile(theme, track, downloadedIds)),
+        ],
+        if (_search.albums.isNotEmpty) ...[
+          _buildSectionHeader(
+              theme, 'Albums', _search.albums.length),
+          ..._search.albums
+              .map((album) => _buildSearchAlbumTile(theme, album)),
+        ],
+        if (_search.playlists.isNotEmpty) ...[
+          _buildSectionHeader(
+              theme, 'Playlists', _search.playlists.length),
+          ..._search.playlists
+              .map((pl) => _buildSearchPlaylistTile(theme, pl)),
+        ],
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
+  Widget _buildSectionHeader(ThemeData theme, String title, int count) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Text('$title ($count)',
+          style: theme.textTheme.titleSmall
+              ?.copyWith(color: theme.colorScheme.primary)),
+    );
+  }
+
+  Widget _buildSearchTrackTile(ThemeData theme, Map<String, dynamic> track,
+      Set<int> downloadedIds) {
+    final title = track['title'] as String? ?? 'Unknown';
+    final artist = track['artist'] as String? ?? 'Unknown';
+    final duration = track['duration'];
+    final trackId = (track['trackId'] as num?)?.toInt() ?? 0;
+    final isExplicit = track['explicit'] == true;
+    final isDownloaded = downloadedIds.contains(trackId);
+
+    return ListTile(
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(title,
+                maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
+          if (isExplicit)
+            Padding(
+              padding: const EdgeInsets.only(left: 4),
+              child: Icon(Icons.explicit,
+                  size: 16, color: theme.colorScheme.outline),
+            ),
         ],
       ),
+      subtitle: Text('$artist · ${_formatTrackDuration(duration)}',
+          maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: isDownloaded
+          ? Icon(Icons.check_circle,
+              color: theme.colorScheme.primary, size: 22)
+          : IconButton(
+              icon: const Icon(Icons.download, size: 22),
+              onPressed: _library.isDownloading
+                  ? null
+                  : () => _downloadTrackFromSearch(track),
+              tooltip: 'Download',
+              visualDensity: VisualDensity.compact,
+            ),
+      dense: true,
     );
+  }
+
+  Widget _buildSearchAlbumTile(ThemeData theme, Map<String, dynamic> album) {
+    final title = album['title'] as String? ?? 'Unknown';
+    final artist = album['artist'] as String? ?? 'Unknown';
+    final trackCount = album['numberOfTracks'] as int? ?? 0;
+
+    return ListTile(
+      leading: const Icon(Icons.album, size: 22),
+      title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text('$artist · $trackCount tracks',
+          maxLines: 1, overflow: TextOverflow.ellipsis),
+      dense: true,
+    );
+  }
+
+  Widget _buildSearchPlaylistTile(
+      ThemeData theme, Map<String, dynamic> pl) {
+    final title = pl['title'] as String? ?? 'Untitled';
+    final trackCount = pl['numberOfTracks'] as int? ?? 0;
+    final duration = pl['duration'];
+
+    return ListTile(
+      leading: const Icon(Icons.queue_music, size: 22),
+      title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(
+          '$trackCount tracks · ${_formatTrackDuration(duration)}',
+          maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () async {
+        final uuid = pl['uuid'] as String? ?? '';
+        if (uuid.isNotEmpty) {
+          await _playlist.fetchPlaylist('playlist/$uuid');
+          if (_playlist.currentPlaylist != null) {
+            _tabIndex = 2;
+            _viewingPlaylistDetail = true;
+            setState(() {});
+          }
+        }
+      },
+      dense: true,
+    );
+  }
+
+  Future<void> _downloadTrackFromSearch(Map<String, dynamic> track) async {
+    final trackId = track['trackId'];
+    final result = await _library.download(
+        'track/$trackId', _settings.audioQuality);
+    if (result != null) {
+      _playback.trackTitle = result['title'] as String?;
+      _playback.trackArtist = result['artist'] as String?;
+      _playback.trackAlbum = result['album'] as String?;
+    }
   }
 
   Widget _buildAuthContent(ThemeData theme) {
@@ -462,7 +643,7 @@ class _HomePageState extends State<HomePage> {
             Text('No songs yet',
                 style: theme.textTheme.bodyLarge
                     ?.copyWith(color: theme.colorScheme.outline)),
-            Text('Paste a Tidal URL above to download',
+            Text('Use the Search tab to find and download music',
                 style: theme.textTheme.bodySmall
                     ?.copyWith(color: theme.colorScheme.outline)),
           ],
@@ -560,7 +741,7 @@ class _HomePageState extends State<HomePage> {
             Text('No playlists saved',
                 style: theme.textTheme.bodyLarge
                     ?.copyWith(color: theme.colorScheme.outline)),
-            Text('Paste a Tidal playlist URL above',
+            Text('Search for playlists in the Search tab',
                 style: theme.textTheme.bodySmall
                     ?.copyWith(color: theme.colorScheme.outline)),
           ],

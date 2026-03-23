@@ -582,6 +582,46 @@ def remove_playlist(uuid):
         return _result(False, error=str(e))
 
 
+def search_tidal(query):
+    """Search Tidal for tracks, albums, and playlists."""
+    try:
+        api = _get_tidal_api()
+        results = api.get_search(query)
+
+        tracks = [{
+            "trackId": t.id,
+            "title": t.title,
+            "artist": t.artist.name if t.artist else "Unknown",
+            "album": t.album.title if t.album else "",
+            "duration": t.duration,
+            "quality": t.audioQuality,
+            "explicit": getattr(t, "explicit", False),
+        } for t in results.tracks.items]
+
+        albums = [{
+            "albumId": a.id,
+            "title": a.title,
+            "artist": a.artist.name if a.artist else "Unknown",
+            "numberOfTracks": a.numberOfTracks,
+        } for a in results.albums.items]
+
+        playlists = [{
+            "uuid": p.uuid,
+            "title": p.title,
+            "numberOfTracks": p.numberOfTracks,
+            "duration": p.duration,
+        } for p in results.playlists.items]
+
+        return _result(True, {
+            "tracks": tracks,
+            "albums": albums,
+            "playlists": playlists,
+        })
+    except Exception as e:
+        logger.error(f"Search error: {e}\n{traceback.format_exc()}")
+        return _result(False, error=str(e))
+
+
 if __name__ == "__main__":
     print("tiddl_bridge loaded successfully")
     print(f"Python {sys.version}")

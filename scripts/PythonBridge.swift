@@ -279,6 +279,17 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(response)
             }
 
+        case "searchTidal":
+            guard let args = call.arguments as? [String: Any],
+                  let query = args["query"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'query'", details: nil))
+                return
+            }
+            let safeQuery = bridge.pythonEscape(query)
+            bridge.runWithResult("tiddl_bridge.search_tidal('\(safeQuery)')") { response in
+                result(response)
+            }
+
         case "getTrackInfo":
             guard let args = call.arguments as? [String: Any],
                   let url = args["url"] as? String else {
