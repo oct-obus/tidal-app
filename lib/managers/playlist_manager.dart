@@ -46,9 +46,14 @@ class PlaylistManager extends ChangeNotifier {
         savedPlaylists = (data['data']['playlists'] as List)
             .cast<Map<String, dynamic>>();
         notifyListeners();
+      } else {
+        error = data['error'] as String? ?? 'Failed to load playlists';
+        notifyListeners();
       }
     } catch (e) {
       debugPrint('Error in loadSavedPlaylists: $e');
+      error = e.toString();
+      notifyListeners();
     }
   }
 
@@ -57,13 +62,23 @@ class PlaylistManager extends ChangeNotifier {
       final jsonStr = jsonEncode(playlist);
       final response = await pythonChannel
           .invokeMethod<String>('savePlaylist', {'json': jsonStr});
-      if (response == null) return;
+      if (response == null) {
+        error = 'No response from bridge';
+        notifyListeners();
+        return;
+      }
       final data = jsonDecode(response);
       if (data['success'] == true) {
+        error = null;
         await loadSavedPlaylists();
+      } else {
+        error = data['error'] as String? ?? 'Failed to save playlist';
+        notifyListeners();
       }
     } catch (e) {
       debugPrint('Error in savePlaylist: $e');
+      error = e.toString();
+      notifyListeners();
     }
   }
 
@@ -71,17 +86,27 @@ class PlaylistManager extends ChangeNotifier {
     try {
       final response = await pythonChannel
           .invokeMethod<String>('removePlaylist', {'uuid': uuid});
-      if (response == null) return;
+      if (response == null) {
+        error = 'No response from bridge';
+        notifyListeners();
+        return;
+      }
       final data = jsonDecode(response);
       if (data['success'] == true) {
+        error = null;
         await loadSavedPlaylists();
         if (currentPlaylist?['uuid'] == uuid) {
           currentPlaylist = null;
         }
         notifyListeners();
+      } else {
+        error = data['error'] as String? ?? 'Failed to remove playlist';
+        notifyListeners();
       }
     } catch (e) {
       debugPrint('Error in removePlaylist: $e');
+      error = e.toString();
+      notifyListeners();
     }
   }
 

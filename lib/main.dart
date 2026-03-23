@@ -425,19 +425,22 @@ class _HomePageState extends State<HomePage> {
       children: [
         if (_search.tracks.isNotEmpty) ...[
           _buildSectionHeader(
-              theme, 'Tracks', _search.tracks.length),
+              theme, 'Tracks', _search.tracks.length,
+              total: _search.totalTracks),
           ..._search.tracks.map(
               (track) => _buildSearchTrackTile(theme, track, downloadedIds)),
         ],
         if (_search.albums.isNotEmpty) ...[
           _buildSectionHeader(
-              theme, 'Albums', _search.albums.length),
+              theme, 'Albums', _search.albums.length,
+              total: _search.totalAlbums),
           ..._search.albums
               .map((album) => _buildSearchAlbumTile(theme, album)),
         ],
         if (_search.playlists.isNotEmpty) ...[
           _buildSectionHeader(
-              theme, 'Playlists', _search.playlists.length),
+              theme, 'Playlists', _search.playlists.length,
+              total: _search.totalPlaylists),
           ..._search.playlists
               .map((pl) => _buildSearchPlaylistTile(theme, pl)),
         ],
@@ -446,10 +449,14 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildSectionHeader(ThemeData theme, String title, int count) {
+  Widget _buildSectionHeader(ThemeData theme, String title, int count,
+      {int? total}) {
+    final label = (total != null && total > count)
+        ? '$title (showing $count of $total)'
+        : '$title ($count)';
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: Text('$title ($count)',
+      child: Text(label,
           style: theme.textTheme.titleSmall
               ?.copyWith(color: theme.colorScheme.primary)),
     );
@@ -766,7 +773,7 @@ class _HomePageState extends State<HomePage> {
             child: const Icon(Icons.delete, color: Colors.white),
           ),
           confirmDismiss: (_) async {
-            return await showDialog<bool>(
+            final confirmed = await showDialog<bool>(
               context: ctx,
               builder: (c) => AlertDialog(
                 title: const Text('Remove playlist?'),
@@ -781,8 +788,18 @@ class _HomePageState extends State<HomePage> {
                 ],
               ),
             );
+            if (confirmed != true) return false;
+            await _playlist.removePlaylist(pl['uuid'] as String);
+            if (_playlist.error != null) {
+              if (ctx.mounted) {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  SnackBar(content: Text(_playlist.error!)),
+                );
+              }
+              return false;
+            }
+            return true;
           },
-          onDismissed: (_) => _playlist.removePlaylist(pl['uuid'] as String),
           child: ListTile(
             leading: const Icon(Icons.queue_music),
             title: Text(title,

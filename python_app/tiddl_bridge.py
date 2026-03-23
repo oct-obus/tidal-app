@@ -457,14 +457,28 @@ def _get_playlists_path():
 def get_playlist_info(url_or_id):
     """Fetch playlist metadata and all tracks from Tidal."""
     try:
+        import requests as _requests
         from tiddl.cli.utils.resource import TidalResource
 
         api = _get_tidal_api()
-        resource = TidalResource.from_string(url_or_id)
+
+        try:
+            resource = TidalResource.from_string(url_or_id)
+        except ValueError as e:
+            logger.error(f"Invalid URL format: {e}")
+            return _result(False, error="Invalid URL format")
+
         if resource.type != "playlist":
             return _result(False, error=f"Not a playlist URL, got: {resource.type}")
 
-        playlist = api.get_playlist(resource.id)
+        try:
+            playlist = api.get_playlist(resource.id)
+        except _requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                logger.error(f"Playlist not found: {e}")
+                return _result(False, error="Playlist not found")
+            logger.error(f"HTTP error fetching playlist: {e}")
+            return _result(False, error=str(e))
 
         # Paginate through all tracks
         tracks = []
@@ -509,8 +523,14 @@ def list_playlists():
         path = _get_playlists_path()
         if not path or not os.path.exists(path):
             return _result(True, {"playlists": []})
-        with open(path) as f:
-            data = json.load(f)
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except json.JSONDecodeError:
+            backup = path + ".corrupt"
+            os.rename(path, backup)
+            logger.error(f"Corrupt playlists.json backed up to {backup}")
+            return _result(True, {"playlists": []})
         return _result(True, {"playlists": data if isinstance(data, list) else []})
     except Exception as e:
         logger.error(f"List playlists error: {e}")
@@ -531,9 +551,15 @@ def save_playlist(playlist_json):
 
         playlists = []
         if os.path.exists(path):
-            with open(path) as f:
-                playlists = json.load(f)
-            if not isinstance(playlists, list):
+            try:
+                with open(path) as f:
+                    playlists = json.load(f)
+                if not isinstance(playlists, list):
+                    playlists = []
+            except json.JSONDecodeError:
+                backup = path + ".corrupt"
+                os.rename(path, backup)
+                logger.error(f"Corrupt playlists.json backed up to {backup}")
                 playlists = []
 
         # Replace existing or append
@@ -614,8 +640,11 @@ def search_tidal(query):
 
         return _result(True, {
             "tracks": tracks,
+            "totalTracks": results.tracks.totalNumberOfItems,
             "albums": albums,
+            "totalAlbums": results.albums.totalNumberOfItems,
             "playlists": playlists,
+            "totalPlaylists": results.playlists.totalNumberOfItems,
         })
     except Exception as e:
         logger.error(f"Search error: {e}\n{traceback.format_exc()}")

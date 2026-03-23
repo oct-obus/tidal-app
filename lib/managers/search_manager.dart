@@ -6,6 +6,9 @@ class SearchManager extends ChangeNotifier {
   List<Map<String, dynamic>> tracks = [];
   List<Map<String, dynamic>> albums = [];
   List<Map<String, dynamic>> playlists = [];
+  int totalTracks = 0;
+  int totalAlbums = 0;
+  int totalPlaylists = 0;
   bool isSearching = false;
   String? error;
   String lastQuery = '';
@@ -31,6 +34,9 @@ class SearchManager extends ChangeNotifier {
         tracks = (result['tracks'] as List).cast<Map<String, dynamic>>();
         albums = (result['albums'] as List).cast<Map<String, dynamic>>();
         playlists = (result['playlists'] as List).cast<Map<String, dynamic>>();
+        totalTracks = (result['totalTracks'] as num?)?.toInt() ?? tracks.length;
+        totalAlbums = (result['totalAlbums'] as num?)?.toInt() ?? albums.length;
+        totalPlaylists = (result['totalPlaylists'] as num?)?.toInt() ?? playlists.length;
         error = null;
       } else {
         error = data['error'] as String? ?? 'Search failed';
@@ -48,6 +54,9 @@ class SearchManager extends ChangeNotifier {
     tracks = [];
     albums = [];
     playlists = [];
+    totalTracks = 0;
+    totalAlbums = 0;
+    totalPlaylists = 0;
     error = null;
     lastQuery = '';
     notifyListeners();
