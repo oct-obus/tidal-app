@@ -48,6 +48,12 @@ def set_documents_dir(path):
     os.makedirs(path, exist_ok=True)
 
 
+def _cover_url(cover_uuid, size=160):
+    if not cover_uuid:
+        return None
+    return f"https://resources.tidal.com/images/{cover_uuid.replace('-', '/')}/{size}x{size}.jpg"
+
+
 def _get_config_path():
     if DOCUMENTS_DIR:
         return os.path.join(DOCUMENTS_DIR, "tiddl.json")
@@ -452,6 +458,7 @@ def download_track(url_or_id, quality="LOSSLESS"):
                 "fileExtension": file_ext,
                 "fileSize": os.path.getsize(file_path),
                 "downloadDate": datetime.now().isoformat(),
+                "coverUrl": _cover_url(track.album.cover) if track.album and track.album.cover else None,
             }
             meta_path = file_path + ".meta.json"
             meta_tmp = meta_path + ".tmp"
@@ -585,6 +592,7 @@ def get_playlist_info(url_or_id):
                     "quality": t.audioQuality if hasattr(t, "audioQuality") else None,
                     "explicit": getattr(t, "explicit", False),
                     "index": getattr(t, "index", offset + len(tracks)),
+                    "coverUrl": _cover_url(t.album.cover) if t.album and t.album.cover else None,
                 })
             offset += limit
 
@@ -595,6 +603,7 @@ def get_playlist_info(url_or_id):
             "numberOfTracks": playlist.numberOfTracks,
             "duration": playlist.duration,
             "lastUpdated": getattr(playlist, "lastUpdated", None),
+            "coverUrl": _cover_url(playlist.squareImage) if hasattr(playlist, 'squareImage') and playlist.squareImage else None,
             "tracks": tracks,
         })
     except Exception as e:
@@ -715,6 +724,7 @@ def search_tidal(query, limit=25, offset=0):
             "duration": t.duration,
             "quality": t.audioQuality,
             "explicit": getattr(t, "explicit", False),
+            "coverUrl": _cover_url(t.album.cover) if t.album else None,
         } for t in results.tracks.items]
 
         albums = [{
@@ -722,6 +732,7 @@ def search_tidal(query, limit=25, offset=0):
             "title": a.title,
             "artist": _get_artist_name(a),
             "numberOfTracks": a.numberOfTracks,
+            "coverUrl": _cover_url(a.cover),
         } for a in results.albums.items]
 
         playlists = [{
@@ -729,6 +740,7 @@ def search_tidal(query, limit=25, offset=0):
             "title": p.title,
             "numberOfTracks": p.numberOfTracks,
             "duration": p.duration,
+            "coverUrl": _cover_url(p.squareImage) if hasattr(p, 'squareImage') and p.squareImage else None,
         } for p in results.playlists.items]
 
         return _result(True, {

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../managers/playlist_manager.dart';
 import '../managers/library_manager.dart';
 import '../utils/formatters.dart';
+import 'cover_thumbnail.dart';
 
 class PlaylistsTab extends StatelessWidget {
   final PlaylistManager playlist;
@@ -83,7 +84,10 @@ class PlaylistsTab extends StatelessWidget {
             return true;
           },
           child: ListTile(
-            leading: const Icon(Icons.queue_music),
+            leading: CoverThumbnail(
+              coverUrl: pl['coverUrl'] as String?,
+              fallbackIcon: Icons.queue_music,
+            ),
             title:
                 Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
             subtitle: Text(
@@ -238,13 +242,9 @@ class PlaylistDetailView extends StatelessWidget {
                     final isDownloaded = downloadedIds.contains(trackId);
 
                     return ListTile(
-                      leading: SizedBox(
-                        width: 28,
-                        child: Center(
-                          child: Text('${i + 1}',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.outline)),
-                        ),
+                      leading: CoverThumbnail(
+                        coverUrl: track['coverUrl'] as String?,
+                        size: 40,
                       ),
                       title: Row(
                         children: [

@@ -3,6 +3,7 @@ import '../managers/library_manager.dart';
 import '../managers/settings_manager.dart';
 import '../managers/playback_manager.dart';
 import '../utils/formatters.dart';
+import 'cover_thumbnail.dart';
 
 class LibraryTab extends StatelessWidget {
   final LibraryManager library;
@@ -129,9 +130,9 @@ class LibraryTab extends StatelessWidget {
       },
       onDismissed: (_) => onDelete(filePath),
       child: ListTile(
-        leading: Icon(
-          isActive && playback.isPlaying ? Icons.equalizer : Icons.music_note,
-          color: isActive ? theme.colorScheme.primary : null,
+        leading: CoverThumbnail(
+          coverUrl: meta?['coverUrl'] as String?,
+          fallbackIcon: isActive && playback.isPlaying ? Icons.equalizer : Icons.music_note,
         ),
         title: Text(name,
             maxLines: 1,

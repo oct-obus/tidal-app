@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../managers/search_manager.dart';
 import '../managers/library_manager.dart';
 import '../utils/formatters.dart';
+import 'cover_thumbnail.dart';
 
 class SearchTab extends StatelessWidget {
   final SearchManager search;
@@ -201,6 +202,7 @@ class SearchTab extends StatelessWidget {
     final isDownloaded = downloadedIds.contains(trackId);
 
     return ListTile(
+      leading: CoverThumbnail(coverUrl: track['coverUrl'] as String?),
       title: Row(
         children: [
           Expanded(
@@ -239,7 +241,7 @@ class SearchTab extends StatelessWidget {
     final trackCount = album['numberOfTracks'] as int? ?? 0;
 
     return ListTile(
-      leading: const Icon(Icons.album, size: 22),
+      leading: CoverThumbnail(coverUrl: album['coverUrl'] as String?, fallbackIcon: Icons.album),
       title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text('$artist · $trackCount tracks',
           maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -254,7 +256,7 @@ class SearchTab extends StatelessWidget {
     final duration = pl['duration'];
 
     return ListTile(
-      leading: const Icon(Icons.queue_music, size: 22),
+      leading: CoverThumbnail(coverUrl: pl['coverUrl'] as String?, fallbackIcon: Icons.queue_music),
       title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(
           '$trackCount tracks · ${formatTrackDuration(duration)}',
