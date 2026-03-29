@@ -55,6 +55,15 @@ def _get_config_path():
     return None
 
 
+def _get_artist_name(obj):
+    """Get artist name from a tiddl model, using artists list as fallback."""
+    if obj.artist:
+        return obj.artist.name
+    if hasattr(obj, "artists") and obj.artists:
+        return ", ".join(a.name for a in obj.artists)
+    return "Unknown"
+
+
 def _result(success, data=None, error=None):
     """Return JSON result string for Swift bridge."""
     return json.dumps({
@@ -275,7 +284,7 @@ def get_track_info(url_or_id):
         return _result(True, {
             "id": track.id,
             "title": track.title,
-            "artist": track.artist.name if track.artist else "Unknown",
+            "artist": _get_artist_name(track),
             "album": track.album.title,
             "duration": track.duration,
             "quality": track.audioQuality,
@@ -330,7 +339,7 @@ def download_track(url_or_id, quality="LOSSLESS"):
             return _result(False, error=f"Only track URLs supported, got: {resource.type}")
 
         track = api.get_track(resource.id)
-        artist_name = track.artist.name if track.artist else "Unknown"
+        artist_name = _get_artist_name(track)
         _write_progress("stream", _PROGRESS_STREAM, f"{artist_name} - {track.title}")
 
         stream = api.get_track_stream(resource.id, quality)
@@ -552,7 +561,7 @@ def get_playlist_info(url_or_id):
                 tracks.append({
                     "trackId": t.id,
                     "title": t.title,
-                    "artist": t.artist.name if t.artist else "Unknown",
+                    "artist": _get_artist_name(t),
                     "album": t.album.title if t.album else "Unknown",
                     "duration": t.duration,
                     "quality": t.audioQuality if hasattr(t, "audioQuality") else None,
@@ -676,7 +685,7 @@ def search_tidal(query):
         tracks = [{
             "trackId": t.id,
             "title": t.title,
-            "artist": t.artist.name if t.artist else "Unknown",
+            "artist": _get_artist_name(t),
             "album": t.album.title if t.album else "",
             "duration": t.duration,
             "quality": t.audioQuality,
@@ -686,7 +695,7 @@ def search_tidal(query):
         albums = [{
             "albumId": a.id,
             "title": a.title,
-            "artist": a.artist.name if a.artist else "Unknown",
+            "artist": _get_artist_name(a),
             "numberOfTracks": a.numberOfTracks,
         } for a in results.albums.items]
 
