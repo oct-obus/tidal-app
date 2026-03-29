@@ -18,10 +18,12 @@ class SearchManager extends ChangeNotifier {
   int _playlistsOffset = 0;
   static const int _pageSize = 25;
   bool isLoadingMore = false;
+  String? _loadingMoreType;
 
   bool get hasMoreTracks => tracks.length < totalTracks;
   bool get hasMoreAlbums => albums.length < totalAlbums;
   bool get hasMorePlaylists => playlists.length < totalPlaylists;
+  bool isLoadingType(String type) => isLoadingMore && _loadingMoreType == type;
 
   Future<void> search(String query) async {
     if (query.trim().isEmpty) return;
@@ -67,6 +69,7 @@ class SearchManager extends ChangeNotifier {
     if (lastQuery.isEmpty || isLoadingMore) return;
 
     isLoadingMore = true;
+    _loadingMoreType = type;
     notifyListeners();
 
     try {

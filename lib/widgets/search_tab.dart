@@ -131,7 +131,7 @@ class SearchTab extends StatelessWidget {
               .map((track) => _buildSearchTrackTile(theme, track)),
           if (search.hasMoreTracks)
             _buildLoadMoreButton(
-                context: null, type: 'tracks', isLoading: search.isLoadingMore),
+                type: 'tracks', isLoading: search.isLoadingType('tracks')),
         ],
         if (search.albums.isNotEmpty) ...[
           _buildSectionHeader(theme, 'Albums', search.albums.length,
@@ -140,7 +140,7 @@ class SearchTab extends StatelessWidget {
               .map((album) => _buildSearchAlbumTile(theme, album)),
           if (search.hasMoreAlbums)
             _buildLoadMoreButton(
-                context: null, type: 'albums', isLoading: search.isLoadingMore),
+                type: 'albums', isLoading: search.isLoadingType('albums')),
         ],
         if (search.playlists.isNotEmpty) ...[
           _buildSectionHeader(theme, 'Playlists', search.playlists.length,
@@ -149,9 +149,8 @@ class SearchTab extends StatelessWidget {
               .map((pl) => _buildSearchPlaylistTile(theme, pl)),
           if (search.hasMorePlaylists)
             _buildLoadMoreButton(
-                context: null,
                 type: 'playlists',
-                isLoading: search.isLoadingMore),
+                isLoading: search.isLoadingType('playlists')),
         ],
         const SizedBox(height: 16),
       ],
@@ -159,7 +158,6 @@ class SearchTab extends StatelessWidget {
   }
 
   Widget _buildLoadMoreButton({
-    required Object? context,
     required String type,
     required bool isLoading,
   }) {
