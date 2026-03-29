@@ -8,6 +8,7 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
     private var player: AVPlayer?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
+    private var statusObserver: NSKeyValueObservation?
     private var stateChannel: FlutterMethodChannel?
 
     private var currentFilePath: String?
@@ -16,6 +17,7 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
     private var currentAlbum: String?
     private var playbackSpeed: Float = 1.0
     private var isPlaying = false
+    private var lastError: String?
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(
@@ -125,10 +127,42 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
 
     private func playFile(_ filePath: String, speed: Float) {
         cleanupObservers()
+        lastError = nil
+
+        // Verify file exists before attempting playback
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: filePath) else {
+            let msg = "File not found: \(filePath)"
+            NSLog("AudioBridge: \(msg)")
+            lastError = msg
+            isPlaying = false
+            stateChannel?.invokeMethod("onPlaybackError", arguments: ["error": msg])
+            return
+        }
 
         let url = URL(fileURLWithPath: filePath)
+        let fileSize = (try? fm.attributesOfItem(atPath: filePath)[.size]) ?? "?"
+        NSLog("AudioBridge: Playing file: \(filePath) (size: \(fileSize) bytes)")
         let item = AVPlayerItem(url: url)
         item.audioTimePitchAlgorithm = .varispeed
+
+        // Observe item status to detect load failures
+        statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            DispatchQueue.main.async {
+                switch item.status {
+                case .readyToPlay:
+                    NSLog("AudioBridge: Item ready, duration: \(item.duration.seconds)s")
+                case .failed:
+                    let errMsg = item.error?.localizedDescription ?? "Unknown playback error"
+                    NSLog("AudioBridge: Playback failed: \(errMsg)")
+                    self?.lastError = errMsg
+                    self?.isPlaying = false
+                    self?.stateChannel?.invokeMethod("onPlaybackError", arguments: ["error": errMsg])
+                default:
+                    break
+                }
+            }
+        }
 
         player = AVPlayer(playerItem: item)
         currentFilePath = filePath
@@ -196,12 +230,16 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
     private func getState() -> [String: Any] {
         let position = player?.currentTime().seconds ?? 0
         let duration = player?.currentItem?.duration.seconds ?? 0
-        return [
+        var state: [String: Any] = [
             "isPlaying": isPlaying,
             "position": (position.isNaN || position.isInfinite) ? 0.0 : position,
             "duration": (duration.isNaN || duration.isInfinite) ? 0.0 : duration,
             "speed": Double(playbackSpeed),
         ]
+        if let error = lastError {
+            state["error"] = error
+        }
+        return state
     }
 
     private func updateNowPlayingInfo() {
@@ -226,5 +264,7 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
             p.removeTimeObserver(observer)
             timeObserver = nil
         }
+        statusObserver?.invalidate()
+        statusObserver = nil
     }
 }

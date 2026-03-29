@@ -79,7 +79,25 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _onManagerChanged() {
-    if (mounted) setState(() {});
+    if (mounted) {
+      // Show error snackbar if playback failed
+      if (_playback.lastError != null) {
+        final error = _playback.lastError!;
+        _playback.lastError = null;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Playback error: $error'),
+                duration: const Duration(seconds: 5),
+                backgroundColor: Theme.of(context).colorScheme.error,
+              ),
+            );
+          }
+        });
+      }
+      setState(() {});
+    }
   }
 
   Future<void> _init() async {
@@ -268,14 +286,27 @@ class _HomePageState extends State<HomePage> {
         final data = jsonDecode(response);
         if (data['success'] == true) {
           final count = data['data']['importedCount'] as int? ?? 0;
-          final errors = data['data']['errors'] as List? ?? [];
+          final errors = (data['data']['errors'] as List?)?.cast<String>() ?? [];
           await _library.loadLibrary();
           if (mounted) {
-            final msg = errors.isEmpty
-                ? 'Imported $count file${count != 1 ? 's' : ''}'
-                : 'Imported $count, ${errors.length} failed';
+            if (errors.isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Imported $count file${count != 1 ? 's' : ''}')),
+              );
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Imported $count, ${errors.length} failed:\n${errors.join('\n')}'),
+                  duration: const Duration(seconds: 6),
+                ),
+              );
+            }
+          }
+        } else {
+          final error = data['error'] ?? 'Unknown error';
+          if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(msg)),
+              SnackBar(content: Text('Import failed: $error')),
             );
           }
         }

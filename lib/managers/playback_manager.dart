@@ -13,6 +13,7 @@ class PlaybackManager extends ChangeNotifier {
   String? trackArtist;
   String? trackAlbum;
   double playbackSpeed = 1.0;
+  String? lastError;
 
   Timer? _playerStateTimer;
   bool _isDisposed = false;
@@ -21,6 +22,12 @@ class PlaybackManager extends ChangeNotifier {
     audioChannel.setMethodCallHandler((call) async {
       if (call.method == 'onPlaybackComplete') {
         isPlaying = false;
+        notifyListeners();
+      } else if (call.method == 'onPlaybackError') {
+        final args = call.arguments as Map?;
+        lastError = args?['error']?.toString() ?? 'Unknown playback error';
+        isPlaying = false;
+        debugPrint('PlaybackManager: Error from AudioBridge: $lastError');
         notifyListeners();
       }
     });
@@ -36,9 +43,17 @@ class PlaybackManager extends ChangeNotifier {
           final newPos = (state['position'] as num?)?.toDouble() ?? 0;
           final newDur = (state['duration'] as num?)?.toDouble() ?? 0;
           final newPlaying = state['isPlaying'] == true;
+          final error = state['error'] as String?;
 
           if (!isSeeking) positionNotifier.value = newPos;
           durationNotifier.value = newDur;
+
+          if (error != null && lastError == null) {
+            lastError = error;
+            isPlaying = false;
+            notifyListeners();
+            return;
+          }
 
           if (newPlaying != isPlaying) {
             isPlaying = newPlaying;
@@ -58,6 +73,7 @@ class PlaybackManager extends ChangeNotifier {
 
   Future<void> playSong(String filePath,
       {String? title, String? artist, String? album}) async {
+    lastError = null;
     await audioChannel.invokeMethod('play', {
       'filePath': filePath,
       'speed': playbackSpeed,
