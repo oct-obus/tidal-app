@@ -3,6 +3,13 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../services/channels.dart';
+import 'settings_manager.dart';
+
+class LibraryGroup {
+  final String label;
+  final List<Map<String, dynamic>> songs;
+  LibraryGroup(this.label, this.songs);
+}
 
 class LibraryManager extends ChangeNotifier {
   List<Map<String, dynamic>> library = [];
@@ -13,6 +20,97 @@ class LibraryManager extends ChangeNotifier {
 
   Timer? _progressTimer;
   bool _isDisposed = false;
+
+  List<Map<String, dynamic>> sortedLibrary(SortField field, bool ascending) {
+    final sorted = List<Map<String, dynamic>>.from(library);
+    sorted.sort((a, b) {
+      final cmp = _compareBy(field, a, b);
+      return ascending ? cmp : -cmp;
+    });
+    return sorted;
+  }
+
+  List<LibraryGroup> groupedLibrary(SortField sortField, bool ascending, GroupBy groupBy) {
+    final sorted = sortedLibrary(sortField, ascending);
+    if (groupBy == GroupBy.none) {
+      return [LibraryGroup('', sorted)];
+    }
+
+    final groups = <String, List<Map<String, dynamic>>>{};
+    final groupOrder = <String>[];
+
+    for (final song in sorted) {
+      final key = _groupKey(groupBy, song);
+      if (!groups.containsKey(key)) {
+        groups[key] = [];
+        groupOrder.add(key);
+      }
+      groups[key]!.add(song);
+    }
+
+    return groupOrder.map((k) => LibraryGroup(k, groups[k]!)).toList();
+  }
+
+  int _compareBy(SortField field, Map<String, dynamic> a, Map<String, dynamic> b) {
+    final metaA = a['meta'] as Map<String, dynamic>?;
+    final metaB = b['meta'] as Map<String, dynamic>?;
+
+    switch (field) {
+      case SortField.downloadDate:
+        final da = _parseDate(metaA?['downloadDate']);
+        final db = _parseDate(metaB?['downloadDate']);
+        return da.compareTo(db);
+      case SortField.title:
+        final ta = (metaA?['title'] as String?) ?? displayName(a['fileName'] as String);
+        final tb = (metaB?['title'] as String?) ?? displayName(b['fileName'] as String);
+        return ta.toLowerCase().compareTo(tb.toLowerCase());
+      case SortField.artist:
+        final aa = (metaA?['artist'] as String?)?.toLowerCase() ?? '\uffff';
+        final ab = (metaB?['artist'] as String?)?.toLowerCase() ?? '\uffff';
+        return aa.compareTo(ab);
+      case SortField.fileSize:
+        final sa = (metaA?['fileSize'] as num?) ?? (a['sizeMB'] as num? ?? 0) * 1048576;
+        final sb = (metaB?['fileSize'] as num?) ?? (b['sizeMB'] as num? ?? 0) * 1048576;
+        return sa.compareTo(sb);
+      case SortField.duration:
+        final da = (metaA?['duration'] as num?) ?? 0;
+        final db = (metaB?['duration'] as num?) ?? 0;
+        return da.compareTo(db);
+    }
+  }
+
+  DateTime _parseDate(dynamic dateStr) {
+    if (dateStr == null) return DateTime(1970);
+    try {
+      return DateTime.parse(dateStr as String);
+    } catch (_) {
+      return DateTime(1970);
+    }
+  }
+
+  String _groupKey(GroupBy groupBy, Map<String, dynamic> song) {
+    final meta = song['meta'] as Map<String, dynamic>?;
+    switch (groupBy) {
+      case GroupBy.none:
+        return '';
+      case GroupBy.artist:
+        return (meta?['artist'] as String?) ?? 'Unknown Artist';
+      case GroupBy.downloadDate:
+        return _dateBucket(_parseDate(meta?['downloadDate']));
+    }
+  }
+
+  String _dateBucket(DateTime dt) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final songDay = DateTime(dt.year, dt.month, dt.day);
+    final diff = today.difference(songDay).inDays;
+    if (dt.year == 1970) return 'Unknown Date';
+    if (diff == 0) return 'Today';
+    if (diff < 7) return 'This Week';
+    if (diff < 30) return 'This Month';
+    return 'Older';
+  }
 
   void startProgressPolling() {
     _progressTimer?.cancel();

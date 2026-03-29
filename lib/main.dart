@@ -250,6 +250,12 @@ class _HomePageState extends State<HomePage> {
         centerTitle: true,
         actions: [
           if (_auth.isAuthenticated) ...[
+            if (_tabIndex == 0 && _library.library.isNotEmpty)
+              IconButton(
+                icon: const Icon(Icons.sort),
+                onPressed: () => _showSortGroupSheet(theme),
+                tooltip: 'Sort & Group',
+              ),
             IconButton(
                 icon: const Icon(Icons.settings),
                 onPressed: () => _showSettingsSheet(theme),
@@ -657,81 +663,125 @@ class _HomePageState extends State<HomePage> {
         ),
       );
     }
-    return ListView.builder(
-      itemCount: _library.library.length,
-      itemBuilder: (ctx, i) {
-        final song = _library.library[i];
-        final filePath = song['filePath'] as String;
-        final fileName = song['fileName'] as String;
-        final sizeMB = song['sizeMB'] as num;
-        final isActive = _playback.currentFilePath == filePath;
-        final name = LibraryManager.displayName(fileName);
 
-        return Dismissible(
-          key: Key(filePath),
-          direction: DismissDirection.endToStart,
-          background: Container(
-            color: Colors.red,
-            alignment: Alignment.centerRight,
-            padding: const EdgeInsets.only(right: 16),
-            child: const Icon(Icons.delete, color: Colors.white),
-          ),
-          confirmDismiss: (_) async {
-            return await showDialog<bool>(
-              context: ctx,
-              builder: (c) => AlertDialog(
-                title: const Text('Delete song?'),
-                content: Text('Delete "$name"?'),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(c, false),
-                      child: const Text('Cancel')),
-                  FilledButton(
-                      onPressed: () => Navigator.pop(c, true),
-                      child: const Text('Delete')),
-                ],
-              ),
-            );
-          },
-          onDismissed: (_) => _deleteSong(filePath),
-          child: ListTile(
-            leading: Icon(
-              isActive && _playback.isPlaying
-                  ? Icons.equalizer
-                  : Icons.music_note,
-              color: isActive ? theme.colorScheme.primary : null,
-            ),
-            title: Text(name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: isActive
-                    ? TextStyle(
-                        color: theme.colorScheme.primary,
-                        fontWeight: FontWeight.bold)
-                    : null),
-            subtitle: Text('${sizeMB.toStringAsFixed(1)} MB'),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.play_arrow, size: 22),
-                  tooltip: 'Play',
-                  onPressed: () => _playSong(filePath, title: name),
-                  visualDensity: VisualDensity.compact,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.info_outline, size: 22),
-                  tooltip: 'Song info',
-                  onPressed: () => _showSongInfoSheet(theme, song),
-                  visualDensity: VisualDensity.compact,
-                ),
-              ],
-            ),
-            onTap: () => _playSong(filePath, title: name),
-            dense: true,
+    final groups = _library.groupedLibrary(
+      _settings.sortField,
+      _settings.sortAscending,
+      _settings.groupBy,
+    );
+    final showHeaders = _settings.groupBy != GroupBy.none;
+
+    return ListView.builder(
+      itemCount: groups.fold<int>(0, (sum, g) => sum + g.songs.length + (showHeaders ? 1 : 0)),
+      itemBuilder: (ctx, index) {
+        var cursor = 0;
+        for (final group in groups) {
+          if (showHeaders) {
+            if (index == cursor) {
+              return _buildGroupHeader(theme, group.label);
+            }
+            cursor++;
+          }
+          if (index < cursor + group.songs.length) {
+            return _buildSongTile(theme, group.songs[index - cursor]);
+          }
+          cursor += group.songs.length;
+        }
+        return const SizedBox.shrink();
+      },
+    );
+  }
+
+  Widget _buildGroupHeader(ThemeData theme, String label) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+      child: Text(
+        label,
+        style: theme.textTheme.titleSmall?.copyWith(
+          color: theme.colorScheme.primary,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSongTile(ThemeData theme, Map<String, dynamic> song) {
+    final filePath = song['filePath'] as String;
+    final fileName = song['fileName'] as String;
+    final meta = song['meta'] as Map<String, dynamic>?;
+    final sizeMB = song['sizeMB'] as num;
+    final isActive = _playback.currentFilePath == filePath;
+    final name = meta?['title'] as String? ?? LibraryManager.displayName(fileName);
+    final artist = meta?['artist'] as String?;
+
+    String subtitle = '${sizeMB.toStringAsFixed(1)} MB';
+    if (artist != null && _settings.groupBy != GroupBy.artist) {
+      subtitle = '$artist  -  $subtitle';
+    }
+
+    return Dismissible(
+      key: Key(filePath),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        color: Colors.red,
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 16),
+        child: const Icon(Icons.delete, color: Colors.white),
+      ),
+      confirmDismiss: (_) async {
+        return await showDialog<bool>(
+          context: context,
+          builder: (c) => AlertDialog(
+            title: const Text('Delete song?'),
+            content: Text('Delete "$name"?'),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(c, false),
+                  child: const Text('Cancel')),
+              FilledButton(
+                  onPressed: () => Navigator.pop(c, true),
+                  child: const Text('Delete')),
+            ],
           ),
         );
       },
+      onDismissed: (_) => _deleteSong(filePath),
+      child: ListTile(
+        leading: Icon(
+          isActive && _playback.isPlaying
+              ? Icons.equalizer
+              : Icons.music_note,
+          color: isActive ? theme.colorScheme.primary : null,
+        ),
+        title: Text(name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: isActive
+                ? TextStyle(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.bold)
+                : null),
+        subtitle: Text(subtitle),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.play_arrow, size: 22),
+              tooltip: 'Play',
+              onPressed: () => _playSong(filePath, title: name),
+              visualDensity: VisualDensity.compact,
+            ),
+            IconButton(
+              icon: const Icon(Icons.info_outline, size: 22),
+              tooltip: 'Song info',
+              onPressed: () => _showSongInfoSheet(theme, song),
+              visualDensity: VisualDensity.compact,
+            ),
+          ],
+        ),
+        onTap: () => _playSong(filePath, title: name),
+        dense: true,
+      ),
     );
   }
 
@@ -1151,6 +1201,140 @@ class _HomePageState extends State<HomePage> {
     } catch (e) {
       debugPrint('Error parsing download date: $e');
       return dateStr.toString();
+    }
+  }
+
+  void _showSortGroupSheet(ThemeData theme) {
+    const sortLabels = {
+      SortField.downloadDate: 'Date Downloaded',
+      SortField.title: 'Title',
+      SortField.artist: 'Artist',
+      SortField.fileSize: 'File Size',
+      SortField.duration: 'Duration',
+    };
+    const groupLabels = {
+      GroupBy.none: 'None',
+      GroupBy.downloadDate: 'Date Downloaded',
+      GroupBy.artist: 'Artist',
+    };
+
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text('Sort & Group', style: theme.textTheme.titleMedium),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () {
+                      setSheetState(() {
+                        _settings.sortField = SortField.downloadDate;
+                        _settings.sortAscending = false;
+                        _settings.groupBy = GroupBy.none;
+                      });
+                      setState(() {});
+                      _settings.saveSettings(currentSpeed: _playback.playbackSpeed);
+                    },
+                    child: const Text('Reset'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text('Sort by', style: theme.textTheme.labelLarge),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: SortField.values.map((f) {
+                  final selected = _settings.sortField == f;
+                  return ChoiceChip(
+                    label: Text(sortLabels[f]!),
+                    selected: selected,
+                    onSelected: (_) {
+                      setSheetState(() => _settings.sortField = f);
+                      setState(() {});
+                      _settings.saveSettings(currentSpeed: _playback.playbackSpeed);
+                    },
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Text('Direction', style: theme.textTheme.labelLarge),
+                  const Spacer(),
+                  SegmentedButton<bool>(
+                    segments: [
+                      ButtonSegment(value: true, label: Text(_ascLabel(_settings.sortField))),
+                      ButtonSegment(value: false, label: Text(_descLabel(_settings.sortField))),
+                    ],
+                    selected: {_settings.sortAscending},
+                    onSelectionChanged: (v) {
+                      setSheetState(() => _settings.sortAscending = v.first);
+                      setState(() {});
+                      _settings.saveSettings(currentSpeed: _playback.playbackSpeed);
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Text('Group by', style: theme.textTheme.labelLarge),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: GroupBy.values.map((g) {
+                  final selected = _settings.groupBy == g;
+                  return ChoiceChip(
+                    label: Text(groupLabels[g]!),
+                    selected: selected,
+                    onSelected: (_) {
+                      setSheetState(() => _settings.groupBy = g);
+                      setState(() {});
+                      _settings.saveSettings(currentSpeed: _playback.playbackSpeed);
+                    },
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _ascLabel(SortField field) {
+    switch (field) {
+      case SortField.title:
+      case SortField.artist:
+        return 'A-Z';
+      case SortField.downloadDate:
+        return 'Oldest';
+      case SortField.fileSize:
+        return 'Smallest';
+      case SortField.duration:
+        return 'Shortest';
+    }
+  }
+
+  String _descLabel(SortField field) {
+    switch (field) {
+      case SortField.title:
+      case SortField.artist:
+        return 'Z-A';
+      case SortField.downloadDate:
+        return 'Newest';
+      case SortField.fileSize:
+        return 'Largest';
+      case SortField.duration:
+        return 'Longest';
     }
   }
 

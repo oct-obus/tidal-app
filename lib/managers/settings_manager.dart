@@ -2,12 +2,18 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import '../services/channels.dart';
 
+enum SortField { downloadDate, title, artist, fileSize, duration }
+enum GroupBy { none, downloadDate, artist }
+
 class SettingsManager extends ChangeNotifier {
   String audioQuality = 'LOSSLESS';
   double speedMin = 0.70;
   double speedMax = 1.40;
   double speedStep = 0.05;
   double lastSpeed = 1.0;
+  SortField sortField = SortField.downloadDate;
+  bool sortAscending = false;
+  GroupBy groupBy = GroupBy.none;
 
   static const qualityOptions = ['LOW', 'HIGH', 'LOSSLESS', 'HI_RES_LOSSLESS'];
   static const stepOptions = [0.025, 0.05, 0.10, 0.15];
@@ -22,6 +28,9 @@ class SettingsManager extends ChangeNotifier {
         speedMax = (data['speedMax'] as num?)?.toDouble() ?? 1.40;
         speedStep = (data['speedStep'] as num?)?.toDouble() ?? 0.05;
         lastSpeed = (data['lastSpeed'] as num?)?.toDouble() ?? 1.0;
+        sortField = SortField.values.asNameMap()[data['sortField'] as String? ?? ''] ?? SortField.downloadDate;
+        sortAscending = data['sortAscending'] as bool? ?? false;
+        groupBy = GroupBy.values.asNameMap()[data['groupBy'] as String? ?? ''] ?? GroupBy.none;
         notifyListeners();
       }
     } catch (e) {
@@ -37,6 +46,9 @@ class SettingsManager extends ChangeNotifier {
         'speedMax': speedMax,
         'speedStep': speedStep,
         'lastSpeed': currentSpeed,
+        'sortField': sortField.name,
+        'sortAscending': sortAscending,
+        'groupBy': groupBy.name,
       });
       await pythonChannel.invokeMethod('saveSettings', {'json': json});
     } catch (e) {
