@@ -1,7 +1,7 @@
 name: tidal_app
 description: Tidal music downloader for iOS with embedded Python.
 publish_to: 'none'
-version: 1.2.0+3
+version: 1.2.1+4
 
 environment:
   sdk: ^3.6.0
