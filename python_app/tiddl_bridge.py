@@ -693,12 +693,19 @@ def remove_playlist(uuid):
         return _result(False, error=str(e))
 
 
-def search_tidal(query):
+def search_tidal(query, limit=25, offset=0):
     """Search Tidal for tracks, albums, and playlists."""
     try:
         _ensure_valid_token()
         api = _get_tidal_api()
-        results = api.get_search(query)
+
+        from tiddl.core.api.models.base import Search
+        results = api.client.fetch(
+            Search,
+            "search",
+            {"countryCode": api.country_code, "query": query, "limit": limit, "offset": offset},
+            expire_after=-1,
+        )
 
         tracks = [{
             "trackId": t.id,
@@ -731,6 +738,8 @@ def search_tidal(query):
             "totalAlbums": results.albums.totalNumberOfItems,
             "playlists": playlists,
             "totalPlaylists": results.playlists.totalNumberOfItems,
+            "offset": offset,
+            "limit": limit,
         })
     except Exception as e:
         logger.error(f"Search error: {e}\n{traceback.format_exc()}")

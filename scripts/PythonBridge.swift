@@ -286,7 +286,9 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 return
             }
             let safeQuery = bridge.pythonEscape(query)
-            bridge.runWithResult("tiddl_bridge.search_tidal('\(safeQuery)')") { response in
+            let limit = args["limit"] as? Int ?? 25
+            let offset = args["offset"] as? Int ?? 0
+            bridge.runWithResult("tiddl_bridge.search_tidal('\(safeQuery)', limit=\(limit), offset=\(offset))") { response in
                 result(response)
             }
 

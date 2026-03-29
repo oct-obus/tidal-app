@@ -358,6 +358,7 @@ class _HomePageState extends State<HomePage> {
                       },
                       downloadedIds: _getDownloadedTrackIds(),
                       onTextChanged: () => setState(() {}),
+                      onLoadMore: _search.loadMore,
                     )
                   : _viewingPlaylistDetail
                       ? PlaylistDetailView(

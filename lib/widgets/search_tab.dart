@@ -13,6 +13,7 @@ class SearchTab extends StatelessWidget {
   final Future<void> Function(String uuid) onOpenPlaylist;
   final Set<int> downloadedIds;
   final VoidCallback onTextChanged;
+  final Future<void> Function(String type) onLoadMore;
 
   const SearchTab({
     super.key,
@@ -24,6 +25,7 @@ class SearchTab extends StatelessWidget {
     required this.onOpenPlaylist,
     required this.downloadedIds,
     required this.onTextChanged,
+    required this.onLoadMore,
   });
 
   @override
@@ -126,21 +128,53 @@ class SearchTab extends StatelessWidget {
               total: search.totalTracks),
           ...search.tracks
               .map((track) => _buildSearchTrackTile(theme, track)),
+          if (search.hasMoreTracks)
+            _buildLoadMoreButton(
+                context: null, type: 'tracks', isLoading: search.isLoadingMore),
         ],
         if (search.albums.isNotEmpty) ...[
           _buildSectionHeader(theme, 'Albums', search.albums.length,
               total: search.totalAlbums),
           ...search.albums
               .map((album) => _buildSearchAlbumTile(theme, album)),
+          if (search.hasMoreAlbums)
+            _buildLoadMoreButton(
+                context: null, type: 'albums', isLoading: search.isLoadingMore),
         ],
         if (search.playlists.isNotEmpty) ...[
           _buildSectionHeader(theme, 'Playlists', search.playlists.length,
               total: search.totalPlaylists),
           ...search.playlists
               .map((pl) => _buildSearchPlaylistTile(theme, pl)),
+          if (search.hasMorePlaylists)
+            _buildLoadMoreButton(
+                context: null,
+                type: 'playlists',
+                isLoading: search.isLoadingMore),
         ],
         const SizedBox(height: 16),
       ],
+    );
+  }
+
+  Widget _buildLoadMoreButton({
+    required Object? context,
+    required String type,
+    required bool isLoading,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Center(
+        child: isLoading
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2))
+            : TextButton(
+                onPressed: () => onLoadMore(type),
+                child: Text('Load more $type'),
+              ),
+      ),
     );
   }
 

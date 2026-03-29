@@ -13,6 +13,16 @@ class SearchManager extends ChangeNotifier {
   String? error;
   String lastQuery = '';
 
+  int _tracksOffset = 0;
+  int _albumsOffset = 0;
+  int _playlistsOffset = 0;
+  static const int _pageSize = 25;
+  bool isLoadingMore = false;
+
+  bool get hasMoreTracks => tracks.length < totalTracks;
+  bool get hasMoreAlbums => albums.length < totalAlbums;
+  bool get hasMorePlaylists => playlists.length < totalPlaylists;
+
   Future<void> search(String query) async {
     if (query.trim().isEmpty) return;
 
@@ -37,6 +47,9 @@ class SearchManager extends ChangeNotifier {
         totalTracks = (result['totalTracks'] as num?)?.toInt() ?? tracks.length;
         totalAlbums = (result['totalAlbums'] as num?)?.toInt() ?? albums.length;
         totalPlaylists = (result['totalPlaylists'] as num?)?.toInt() ?? playlists.length;
+        _tracksOffset = tracks.length;
+        _albumsOffset = albums.length;
+        _playlistsOffset = playlists.length;
         error = null;
       } else {
         error = data['error'] as String? ?? 'Search failed';
@@ -50,6 +63,63 @@ class SearchManager extends ChangeNotifier {
     }
   }
 
+  Future<void> loadMore(String type) async {
+    if (lastQuery.isEmpty || isLoadingMore) return;
+
+    isLoadingMore = true;
+    notifyListeners();
+
+    try {
+      int offset;
+      if (type == 'tracks') {
+        offset = _tracksOffset;
+      } else if (type == 'albums') {
+        offset = _albumsOffset;
+      } else {
+        offset = _playlistsOffset;
+      }
+
+      final response = await pythonChannel.invokeMethod<String>(
+        'searchTidal',
+        {'query': lastQuery, 'limit': _pageSize, 'offset': offset},
+      );
+      if (response == null) return;
+
+      final data = jsonDecode(response);
+      if (data['success'] == true) {
+        final result = data['data'] as Map<String, dynamic>;
+
+        if (type == 'tracks') {
+          final newTracks =
+              (result['tracks'] as List).cast<Map<String, dynamic>>();
+          tracks.addAll(newTracks);
+          _tracksOffset = tracks.length;
+          totalTracks =
+              (result['totalTracks'] as num?)?.toInt() ?? totalTracks;
+        } else if (type == 'albums') {
+          final newAlbums =
+              (result['albums'] as List).cast<Map<String, dynamic>>();
+          albums.addAll(newAlbums);
+          _albumsOffset = albums.length;
+          totalAlbums =
+              (result['totalAlbums'] as num?)?.toInt() ?? totalAlbums;
+        } else {
+          final newPlaylists =
+              (result['playlists'] as List).cast<Map<String, dynamic>>();
+          playlists.addAll(newPlaylists);
+          _playlistsOffset = playlists.length;
+          totalPlaylists =
+              (result['totalPlaylists'] as num?)?.toInt() ?? totalPlaylists;
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading more $type: $e');
+    } finally {
+      isLoadingMore = false;
+      notifyListeners();
+    }
+  }
+
   void clear() {
     tracks = [];
     albums = [];
@@ -57,6 +127,10 @@ class SearchManager extends ChangeNotifier {
     totalTracks = 0;
     totalAlbums = 0;
     totalPlaylists = 0;
+    _tracksOffset = 0;
+    _albumsOffset = 0;
+    _playlistsOffset = 0;
+    isLoadingMore = false;
     error = null;
     lastQuery = '';
     notifyListeners();
