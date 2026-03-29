@@ -5,7 +5,7 @@ import '../managers/library_manager.dart';
 import '../utils/formatters.dart';
 import 'cover_thumbnail.dart';
 
-class SearchTab extends StatelessWidget {
+class SearchTab extends StatefulWidget {
   final SearchManager search;
   final LibraryManager library;
   final TextEditingController searchController;
@@ -30,14 +30,27 @@ class SearchTab extends StatelessWidget {
   });
 
   @override
+  State<SearchTab> createState() => _SearchTabState();
+}
+
+class _SearchTabState extends State<SearchTab> {
+  final Map<String, bool> _collapsed = {
+    'tracks': false,
+    'albums': false,
+    'playlists': false,
+  };
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final search = widget.search;
+    final library = widget.library;
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
           child: TextField(
-            controller: searchController,
+            controller: widget.searchController,
             enabled: !search.isSearching && !library.isDownloading,
             decoration: InputDecoration(
               hintText: 'Search tracks, albums, playlists or paste URL...',
@@ -47,11 +60,11 @@ class SearchTab extends StatelessWidget {
               suffixIcon: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (searchController.text.isNotEmpty)
+                  if (widget.searchController.text.isNotEmpty)
                     IconButton(
                       icon: const Icon(Icons.clear, size: 20),
                       onPressed: () {
-                        searchController.clear();
+                        widget.searchController.clear();
                         search.clear();
                       },
                     ),
@@ -63,15 +76,15 @@ class SearchTab extends StatelessWidget {
                             final data =
                                 await Clipboard.getData('text/plain');
                             if (data?.text != null) {
-                              searchController.text = data!.text!;
+                              widget.searchController.text = data!.text!;
                             }
                           },
                   ),
                 ],
               ),
             ),
-            onSubmitted: (_) => onSearch(),
-            onChanged: (_) => onTextChanged(),
+            onSubmitted: (_) => widget.onSearch(),
+            onChanged: (_) => widget.onTextChanged(),
           ),
         ),
         const SizedBox(height: 8),
@@ -122,35 +135,42 @@ class SearchTab extends StatelessWidget {
   }
 
   Widget _buildSearchResults(ThemeData theme) {
+    final search = widget.search;
     return ListView(
       children: [
         if (search.tracks.isNotEmpty) ...[
-          _buildSectionHeader(theme, 'Tracks', search.tracks.length,
+          _buildSectionHeader(theme, 'Tracks', 'tracks', search.tracks.length,
               total: search.totalTracks),
-          ...search.tracks
-              .map((track) => _buildSearchTrackTile(theme, track)),
-          if (search.hasMoreTracks)
-            _buildLoadMoreButton(
-                type: 'tracks', isLoading: search.isLoadingType('tracks')),
+          if (!(_collapsed['tracks'] ?? false)) ...[
+            ...search.tracks
+                .map((track) => _buildSearchTrackTile(theme, track)),
+            if (search.hasMoreTracks)
+              _buildLoadMoreButton(
+                  type: 'tracks', isLoading: search.isLoadingType('tracks')),
+          ],
         ],
         if (search.albums.isNotEmpty) ...[
-          _buildSectionHeader(theme, 'Albums', search.albums.length,
+          _buildSectionHeader(theme, 'Albums', 'albums', search.albums.length,
               total: search.totalAlbums),
-          ...search.albums
-              .map((album) => _buildSearchAlbumTile(theme, album)),
-          if (search.hasMoreAlbums)
-            _buildLoadMoreButton(
-                type: 'albums', isLoading: search.isLoadingType('albums')),
+          if (!(_collapsed['albums'] ?? false)) ...[
+            ...search.albums
+                .map((album) => _buildSearchAlbumTile(theme, album)),
+            if (search.hasMoreAlbums)
+              _buildLoadMoreButton(
+                  type: 'albums', isLoading: search.isLoadingType('albums')),
+          ],
         ],
         if (search.playlists.isNotEmpty) ...[
-          _buildSectionHeader(theme, 'Playlists', search.playlists.length,
+          _buildSectionHeader(theme, 'Playlists', 'playlists', search.playlists.length,
               total: search.totalPlaylists),
-          ...search.playlists
-              .map((pl) => _buildSearchPlaylistTile(theme, pl)),
-          if (search.hasMorePlaylists)
-            _buildLoadMoreButton(
-                type: 'playlists',
-                isLoading: search.isLoadingType('playlists')),
+          if (!(_collapsed['playlists'] ?? false)) ...[
+            ...search.playlists
+                .map((pl) => _buildSearchPlaylistTile(theme, pl)),
+            if (search.hasMorePlaylists)
+              _buildLoadMoreButton(
+                  type: 'playlists',
+                  isLoading: search.isLoadingType('playlists')),
+          ],
         ],
         const SizedBox(height: 16),
       ],
@@ -170,23 +190,38 @@ class SearchTab extends StatelessWidget {
                 height: 24,
                 child: CircularProgressIndicator(strokeWidth: 2))
             : TextButton(
-                onPressed: () => onLoadMore(type),
+                onPressed: () => widget.onLoadMore(type),
                 child: Text('Load more $type'),
               ),
       ),
     );
   }
 
-  Widget _buildSectionHeader(ThemeData theme, String title, int count,
+  Widget _buildSectionHeader(ThemeData theme, String title, String key, int count,
       {int? total}) {
+    final isCollapsed = _collapsed[key] ?? false;
     final label = (total != null && total > count)
-        ? '$title (showing $count of $total)'
+        ? '$title ($count of $total)'
         : '$title ($count)';
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: Text(label,
-          style: theme.textTheme.titleSmall
-              ?.copyWith(color: theme.colorScheme.primary)),
+    return InkWell(
+      onTap: () => setState(() => _collapsed[key] = !isCollapsed),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 12, 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(label,
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(color: theme.colorScheme.primary)),
+            ),
+            Icon(
+              isCollapsed ? Icons.expand_more : Icons.expand_less,
+              size: 20,
+              color: theme.colorScheme.outline,
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -197,7 +232,7 @@ class SearchTab extends StatelessWidget {
     final duration = track['duration'];
     final trackId = (track['trackId'] as num?)?.toInt() ?? 0;
     final isExplicit = track['explicit'] == true;
-    final isDownloaded = downloadedIds.contains(trackId);
+    final isDownloaded = widget.downloadedIds.contains(trackId);
 
     return ListTile(
       leading: CoverThumbnail(coverUrl: track['coverUrl'] as String?),
@@ -222,9 +257,9 @@ class SearchTab extends StatelessWidget {
               color: theme.colorScheme.primary, size: 22)
           : IconButton(
               icon: const Icon(Icons.download, size: 22),
-              onPressed: library.isDownloading
+              onPressed: widget.library.isDownloading
                   ? null
-                  : () => onDownloadTrack(track),
+                  : () => widget.onDownloadTrack(track),
               tooltip: 'Download',
               visualDensity: VisualDensity.compact,
             ),
@@ -264,7 +299,7 @@ class SearchTab extends StatelessWidget {
       onTap: () {
         final uuid = pl['uuid'] as String? ?? '';
         if (uuid.isNotEmpty) {
-          onOpenPlaylist(uuid);
+          widget.onOpenPlaylist(uuid);
         }
       },
       dense: true,

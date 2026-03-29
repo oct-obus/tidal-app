@@ -26,6 +26,8 @@ _PROGRESS_DOWNLOAD_RANGE = 80
 _PROGRESS_METADATA = 92
 _PROGRESS_DONE = 100
 
+_cancel_requested = False
+
 # Diagnostic: log sys.path and verify critical imports at load time
 logger.info(f"Python {sys.version}")
 logger.info(f"sys.path = {sys.path}")
@@ -314,6 +316,37 @@ def _write_progress(step, pct=0, detail=""):
         pass
 
 
+def _check_cancelled():
+    """Check if cancellation was requested via flag file."""
+    if not DOCUMENTS_DIR:
+        return False
+    return os.path.exists(os.path.join(DOCUMENTS_DIR, ".download_cancel"))
+
+
+def _clear_cancel_flag():
+    """Remove the cancellation flag file."""
+    if not DOCUMENTS_DIR:
+        return
+    flag = os.path.join(DOCUMENTS_DIR, ".download_cancel")
+    try:
+        os.remove(flag)
+    except OSError:
+        pass
+
+
+def cancel_download():
+    """Request cancellation by writing a flag file."""
+    if not DOCUMENTS_DIR:
+        return _result(False, error="Documents directory not set")
+    flag = os.path.join(DOCUMENTS_DIR, ".download_cancel")
+    try:
+        with open(flag, "w") as f:
+            f.write("cancel")
+        return _result(True)
+    except Exception as e:
+        return _result(False, error=str(e))
+
+
 def get_download_progress():
     try:
         if not DOCUMENTS_DIR:
@@ -330,6 +363,7 @@ def get_download_progress():
 
 def download_track(url_or_id, quality="LOSSLESS"):
     try:
+        _clear_cancel_flag()
         _ensure_valid_token()
         from tiddl.cli.utils.resource import TidalResource
         from tiddl.core.metadata import add_track_metadata, Cover
@@ -368,6 +402,11 @@ def download_track(url_or_id, quality="LOSSLESS"):
                 content_length = int(resp.headers.get("Content-Length", 0))
                 chunks = []
                 for chunk in resp.iter_content(chunk_size=64 * 1024):
+                    if _check_cancelled():
+                        resp.close()
+                        _write_progress("cancelled", 0, "Download cancelled")
+                        _clear_cancel_flag()
+                        return _result(False, error="cancelled")
                     chunks.append(chunk)
                     total_bytes += len(chunk)
                     mb_done = total_bytes / (1024 * 1024)
@@ -387,6 +426,10 @@ def download_track(url_or_id, quality="LOSSLESS"):
                 # Multiple URLs (DASH manifest): per-segment progress
                 est_total = 0
                 for i, url in enumerate(urls):
+                    if _check_cancelled():
+                        _write_progress("cancelled", 0, "Download cancelled")
+                        _clear_cancel_flag()
+                        return _result(False, error="cancelled")
                     resp = s.get(url, timeout=30)
                     resp.raise_for_status()
                     chunk = resp.content

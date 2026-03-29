@@ -161,6 +161,7 @@ class LibraryManager extends ChangeNotifier {
     isDownloading = true;
     downloadStep = 'Starting...';
     downloadProgress = 0;
+    _wasCancelled = false;
     notifyListeners();
     startProgressPolling();
 
@@ -179,7 +180,13 @@ class LibraryManager extends ChangeNotifier {
         await loadLibrary();
         return data['data'] as Map<String, dynamic>;
       } else {
-        status = 'Error: ${data["error"]}';
+        final error = data['error'] as String? ?? 'Unknown error';
+        if (error == 'cancelled') {
+          _wasCancelled = true;
+          status = '';
+        } else {
+          status = 'Error: $error';
+        }
         notifyListeners();
         return null;
       }
@@ -196,6 +203,18 @@ class LibraryManager extends ChangeNotifier {
       isDownloading = false;
       downloadStep = '';
       notifyListeners();
+    }
+  }
+
+  bool _wasCancelled = false;
+
+  Future<void> cancelDownload() async {
+    try {
+      await pythonChannel.invokeMethod<String>('cancelDownload');
+      downloadStep = 'Cancelling...';
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error cancelling download: $e');
     }
   }
 

@@ -220,6 +220,13 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
             }
             result("{\"success\":true,\"data\":{\"step\":\"idle\",\"pct\":0,\"detail\":\"\"}}")
 
+        case "cancelDownload":
+            // Write cancel flag directly from Swift (bypasses blocked Python queue)
+            let docs = bridge.documentsPath
+            let cancelPath = "\(docs)/.download_cancel"
+            FileManager.default.createFile(atPath: cancelPath, contents: "cancel".data(using: .utf8))
+            result("{\"success\":true}")
+
         case "listDownloads":
             bridge.runWithResult("tiddl_bridge.list_downloads()") { response in
                 result(response)

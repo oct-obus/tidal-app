@@ -319,10 +319,28 @@ class _HomePageState extends State<HomePage> {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: Column(
               children: [
-                LinearProgressIndicator(
-                    value: _library.downloadProgress > 0
-                        ? _library.downloadProgress
-                        : null),
+                Row(
+                  children: [
+                    Expanded(
+                      child: LinearProgressIndicator(
+                          value: _library.downloadProgress > 0
+                              ? _library.downloadProgress
+                              : null),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: IconButton(
+                        icon: const Icon(Icons.close, size: 18),
+                        onPressed: _library.cancelDownload,
+                        padding: EdgeInsets.zero,
+                        tooltip: 'Cancel download',
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 4),
                 Text(_library.downloadStep,
                     style: theme.textTheme.bodySmall
