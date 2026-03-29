@@ -1,11 +1,14 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 import 'managers/auth_manager.dart';
 import 'managers/playback_manager.dart';
 import 'managers/library_manager.dart';
 import 'managers/settings_manager.dart';
 import 'managers/search_manager.dart';
 import 'managers/playlist_manager.dart';
+import 'services/channels.dart';
 import 'widgets/auth_content.dart';
 import 'widgets/library_tab.dart';
 import 'widgets/search_tab.dart';
@@ -238,6 +241,59 @@ class _HomePageState extends State<HomePage> {
     return ids;
   }
 
+  Future<void> _importAudioFiles() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['mp3', 'flac', 'm4a', 'mp4', 'wav', 'ogg', 'opus', 'aac', 'wma', 'webm'],
+        allowMultiple: true,
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      final paths = result.files
+          .where((f) => f.path != null)
+          .map((f) => f.path!)
+          .toList();
+      if (paths.isEmpty) return;
+
+      setState(() {
+        _library.isDownloading = true;
+        _library.downloadStep = 'Importing ${paths.length} file${paths.length > 1 ? 's' : ''}...';
+        _library.downloadProgress = 0;
+      });
+
+      final response = await pythonChannel.invokeMethod<String>(
+          'importFiles', {'filePaths': paths});
+      if (response != null) {
+        final data = jsonDecode(response);
+        if (data['success'] == true) {
+          final count = data['data']['importedCount'] as int? ?? 0;
+          final errors = data['data']['errors'] as List? ?? [];
+          await _library.loadLibrary();
+          if (mounted) {
+            final msg = errors.isEmpty
+                ? 'Imported $count file${count != 1 ? 's' : ''}'
+                : 'Imported $count, ${errors.length} failed';
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(msg)),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Import error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Import failed: $e')),
+        );
+      }
+    } finally {
+      _library.isDownloading = false;
+      _library.downloadStep = '';
+      _library.notifyListeners();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -247,13 +303,20 @@ class _HomePageState extends State<HomePage> {
         centerTitle: true,
         actions: [
           if (_auth.isAuthenticated) ...[
-            if (_tabIndex == 0 && _library.library.isNotEmpty)
+            if (_tabIndex == 0) ...[
               IconButton(
-                icon: const Icon(Icons.sort),
-                onPressed: () => showSortGroupSheet(
-                    context, theme, _settings, _playback, () => setState(() {})),
-                tooltip: 'Sort & Group',
+                icon: const Icon(Icons.file_open),
+                onPressed: _library.isDownloading ? null : _importAudioFiles,
+                tooltip: 'Import audio files',
               ),
+              if (_library.library.isNotEmpty)
+                IconButton(
+                  icon: const Icon(Icons.sort),
+                  onPressed: () => showSortGroupSheet(
+                      context, theme, _settings, _playback, () => setState(() {})),
+                  tooltip: 'Sort & Group',
+                ),
+            ],
             IconButton(
                 icon: const Icon(Icons.settings),
                 onPressed: () => showSettingsSheet(context, theme, _settings,

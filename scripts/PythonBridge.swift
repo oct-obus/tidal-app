@@ -323,6 +323,23 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(response)
             }
 
+        case "importFiles":
+            guard let args = call.arguments as? [String: Any],
+                  let filePaths = args["filePaths"] as? [String] else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'filePaths'", details: nil))
+                return
+            }
+            // Serialize paths as JSON and pass to Python
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: filePaths),
+                  let jsonStr = String(data: jsonData, encoding: .utf8) else {
+                result(FlutterError(code: "JSON_ERROR", message: "Failed to encode paths", details: nil))
+                return
+            }
+            let safeJson = bridge.pythonEscape(jsonStr)
+            bridge.runWithResult("tiddl_bridge.import_files('\(safeJson)')") { response in
+                result(response)
+            }
+
         case "saveSettings":
             guard let args = call.arguments as? [String: Any],
                   let jsonStr = args["json"] as? String else {

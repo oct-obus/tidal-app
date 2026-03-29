@@ -582,6 +582,122 @@ def delete_download(file_path):
         return _result(False, error=str(e))
 
 
+_AUDIO_EXTENSIONS = {'.mp3', '.flac', '.m4a', '.mp4', '.wav', '.ogg', '.opus', '.aac', '.wma', '.webm'}
+
+def _read_audio_metadata(file_path):
+    """Try to extract metadata from an audio file using mutagen."""
+    meta = {}
+    try:
+        from mutagen import File as MutagenFile
+        audio = MutagenFile(file_path, easy=True)
+        if audio is not None:
+            meta['title'] = (audio.get('title') or [None])[0]
+            meta['artist'] = (audio.get('artist') or [None])[0]
+            meta['album'] = (audio.get('album') or [None])[0]
+            if hasattr(audio, 'info') and audio.info:
+                if hasattr(audio.info, 'length') and audio.info.length:
+                    meta['duration'] = int(audio.info.length)
+                if hasattr(audio.info, 'sample_rate') and audio.info.sample_rate:
+                    meta['sampleRate'] = audio.info.sample_rate
+                if hasattr(audio.info, 'bits_per_sample') and audio.info.bits_per_sample:
+                    meta['bitDepth'] = audio.info.bits_per_sample
+    except Exception as e:
+        logger.info(f"Could not read metadata from {file_path}: {e}")
+    return meta
+
+
+def import_files(file_paths_json):
+    """Import local audio files into the downloads directory."""
+    try:
+        if not DOCUMENTS_DIR:
+            return _result(False, error="Documents directory not set")
+
+        file_paths = json.loads(file_paths_json)
+        download_dir = os.path.join(DOCUMENTS_DIR, "downloads")
+        os.makedirs(download_dir, exist_ok=True)
+
+        imported = []
+        errors = []
+        import shutil
+
+        for src_path in file_paths:
+            try:
+                if not os.path.exists(src_path):
+                    errors.append(f"File not found: {src_path}")
+                    continue
+
+                basename = os.path.basename(src_path)
+                name, ext = os.path.splitext(basename)
+                ext_lower = ext.lower()
+
+                if ext_lower not in _AUDIO_EXTENSIONS:
+                    errors.append(f"Unsupported format: {basename}")
+                    continue
+
+                # Destination path (avoid collisions)
+                dest_path = os.path.join(download_dir, basename)
+                if os.path.exists(dest_path):
+                    counter = 1
+                    while os.path.exists(dest_path):
+                        dest_path = os.path.join(download_dir, f"{name} ({counter}){ext}")
+                        counter += 1
+
+                # Copy file atomically
+                tmp_path = dest_path + ".tmp"
+                shutil.copy2(src_path, tmp_path)
+                os.replace(tmp_path, dest_path)
+
+                # Read ID3/metadata from the copied file
+                audio_meta = _read_audio_metadata(dest_path)
+
+                # Build .meta.json
+                title = audio_meta.get('title') or name
+                codec_map = {'.flac': 'FLAC', '.mp3': 'MP3', '.m4a': 'AAC',
+                             '.mp4': 'AAC', '.wav': 'WAV', '.ogg': 'OGG',
+                             '.opus': 'Opus', '.aac': 'AAC', '.wma': 'WMA', '.webm': 'WebM'}
+
+                meta = {
+                    "title": title,
+                    "artist": audio_meta.get('artist') or "Unknown Artist",
+                    "album": audio_meta.get('album') or "",
+                    "trackId": None,
+                    "duration": audio_meta.get('duration'),
+                    "requestedQuality": None,
+                    "servedQuality": None,
+                    "audioMode": None,
+                    "bitDepth": audio_meta.get('bitDepth'),
+                    "sampleRate": audio_meta.get('sampleRate'),
+                    "codec": codec_map.get(ext_lower, ext_lower.lstrip('.')),
+                    "fileExtension": ext_lower,
+                    "fileSize": os.path.getsize(dest_path),
+                    "downloadDate": datetime.now().isoformat(),
+                    "coverUrl": None,
+                    "imported": True,
+                }
+
+                meta_path = dest_path + ".meta.json"
+                meta_tmp = meta_path + ".tmp"
+                with open(meta_tmp, "w") as f:
+                    json.dump(meta, f, indent=2)
+                os.replace(meta_tmp, meta_path)
+
+                imported.append({"fileName": os.path.basename(dest_path), "title": title})
+                logger.info(f"Imported: {os.path.basename(dest_path)}")
+
+            except Exception as e:
+                errors.append(f"{os.path.basename(src_path)}: {e}")
+                logger.error(f"Import error for {src_path}: {e}")
+
+        return _result(True, {
+            "imported": imported,
+            "importedCount": len(imported),
+            "errors": errors,
+        })
+    except Exception as e:
+        logger.error(f"Import error: {e}\n{traceback.format_exc()}")
+        return _result(False, error=str(e))
+
+
 def _get_playlists_path():
     if DOCUMENTS_DIR:
         return os.path.join(DOCUMENTS_DIR, "playlists.json")
