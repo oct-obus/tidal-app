@@ -43,7 +43,6 @@ DOCUMENTS_DIR = None
 
 
 def set_documents_dir(path):
-    """Set the iOS Documents directory path (called from Swift)."""
     global DOCUMENTS_DIR
     DOCUMENTS_DIR = path
     os.makedirs(path, exist_ok=True)
@@ -65,7 +64,6 @@ def _get_artist_name(obj):
 
 
 def _result(success, data=None, error=None):
-    """Return JSON result string for Swift bridge."""
     return json.dumps({
         "success": success,
         "data": data,
@@ -152,8 +150,10 @@ def refresh_auth():
         config["auth"]["expires"] = resp.expires_in
         config["auth"]["token_saved_at"] = int(time.time())
 
-        with open(config_path, "w") as f:
+        tmp_config = config_path + ".tmp"
+        with open(tmp_config, "w") as f:
             json.dump(config, f, indent=2)
+        os.replace(tmp_config, config_path)
 
         return _result(True, {"token": resp.access_token})
     except Exception as e:
@@ -197,7 +197,7 @@ def get_auth_status():
         if saved_at and expires_in:
             token_expired = time.time() > saved_at + expires_in
         elif not saved_at:
-            # No saved_at means old config — assume potentially expired
+            # No saved_at means old config - assume potentially expired
             token_expired = True
 
         if token_expired:
@@ -375,6 +375,8 @@ def download_track(url_or_id, quality="LOSSLESS"):
                         detail = f"{mb_done:.1f} MB"
                     _write_progress("downloading", min(pct, _PROGRESS_DOWNLOAD_START + _PROGRESS_DOWNLOAD_RANGE), detail)
                 stream_data = b"".join(chunks)
+                if content_length > 0 and total_bytes != content_length:
+                    raise IOError(f"Incomplete download: got {total_bytes} of {content_length} bytes")
             else:
                 # Multiple URLs (DASH manifest): per-segment progress
                 est_total = 0

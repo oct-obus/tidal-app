@@ -160,7 +160,7 @@ class _HomePageState extends State<HomePage> {
           setState(() {});
         }
       } else {
-        // Direct track URL — download it
+        // Direct track URL - download it
         final result = await _library.download(input, _settings.audioQuality);
         if (result != null) {
           _playback.trackTitle = result['title'] as String?;
@@ -207,11 +207,12 @@ class _HomePageState extends State<HomePage> {
     await _library.deleteSong(filePath);
   }
 
-  String _formatDuration(double seconds) {
-    if (seconds <= 0 || seconds.isInfinite || seconds.isNaN) return '0:00';
-    final h = seconds ~/ 3600;
-    final m = (seconds % 3600) ~/ 60;
-    final s = (seconds % 60).toInt();
+  String _formatDuration(num seconds) {
+    if (seconds <= 0 || (seconds is double && (seconds.isInfinite || seconds.isNaN))) return '0:00';
+    final total = seconds.toInt();
+    final h = total ~/ 3600;
+    final m = (total % 3600) ~/ 60;
+    final s = total % 60;
     if (h > 0) {
       return '$h:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
     }
@@ -220,14 +221,7 @@ class _HomePageState extends State<HomePage> {
 
   String _formatTrackDuration(dynamic seconds) {
     if (seconds == null) return '-';
-    final total = (seconds as num).toInt();
-    final h = total ~/ 3600;
-    final m = (total % 3600) ~/ 60;
-    final s = total % 60;
-    if (h > 0) {
-      return '$h:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
-    }
-    return '$m:${s.toString().padLeft(2, '0')}';
+    return _formatDuration((seconds as num));
   }
 
   Set<int> _getDownloadedTrackIds() {
@@ -883,7 +877,10 @@ class _HomePageState extends State<HomePage> {
     final totalDuration = pl['duration'] as int? ?? 0;
     final description = pl['description'] as String?;
     final tracks =
-        (pl['tracks'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+        (pl['tracks'] as List?)
+                ?.whereType<Map<String, dynamic>>()
+                .toList() ??
+            [];
     final uuid = pl['uuid'] as String;
     final isSaved = _playlist.isSaved(uuid);
     final downloadedIds = _getDownloadedTrackIds();
@@ -1160,7 +1157,7 @@ class _HomePageState extends State<HomePage> {
 
   String _buildSongSubtitle(Map<String, dynamic>? meta, num sizeMB) {
     final attrs = _settings.displayAttributes;
-    if (attrs.isEmpty) return '';
+    if (attrs.isEmpty) return '${sizeMB.toStringAsFixed(1)} MB';
 
     final parts = <String>[];
     for (final attr in DisplayAttribute.values) {
@@ -1172,7 +1169,7 @@ class _HomePageState extends State<HomePage> {
           if (v != null) parts.add(v);
         case DisplayAttribute.duration:
           final v = meta?['duration'];
-          if (v != null) parts.add(_formatMetaDuration(v));
+          if (v != null) parts.add(_formatTrackDuration(v));
         case DisplayAttribute.fileSize:
           final bytes = meta?['fileSize'];
           if (bytes != null) {
@@ -1237,14 +1234,6 @@ class _HomePageState extends State<HomePage> {
       }
     }
     return parts.isEmpty ? '(nothing)' : parts.join(' \u00b7 ');
-  }
-
-  String _formatMetaDuration(dynamic seconds) {
-    if (seconds == null) return '-';
-    final s = (seconds as num).toInt();
-    final m = s ~/ 60;
-    final sec = s % 60;
-    return '$m:${sec.toString().padLeft(2, '0')}';
   }
 
   String _formatFileSize(dynamic bytes) {
@@ -1517,7 +1506,7 @@ class _HomePageState extends State<HomePage> {
                     Text('File', style: theme.textTheme.titleSmall),
                     const Divider(),
                     _infoRow(theme, 'Size', _formatFileSize(meta['fileSize'])),
-                    _infoRow(theme, 'Duration', _formatMetaDuration(meta['duration'])),
+                    _infoRow(theme, 'Duration', _formatTrackDuration(meta['duration'])),
                     _infoRow(theme, 'Extension', meta['fileExtension']),
                     _infoRow(theme, 'Downloaded', _formatDownloadDate(meta['downloadDate'])),
                   ],
