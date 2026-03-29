@@ -12,6 +12,7 @@ import os
 import sys
 import json
 import logging
+import time
 import traceback
 from datetime import datetime
 
@@ -95,6 +96,7 @@ def check_auth_token(device_code):
                 "token": resp.access_token,
                 "refresh_token": resp.refresh_token,
                 "expires": resp.expires_in,
+                "token_saved_at": int(time.time()),
                 "user_id": str(resp.user_id),
                 "country_code": resp.user.countryCode if hasattr(resp, 'user') else "",
             }
@@ -139,6 +141,7 @@ def refresh_auth():
 
         config["auth"]["token"] = resp.access_token
         config["auth"]["expires"] = resp.expires_in
+        config["auth"]["token_saved_at"] = int(time.time())
 
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
@@ -173,10 +176,62 @@ def get_auth_status():
         with open(config_path) as f:
             config = json.load(f)
 
-        token = config.get("auth", {}).get("token", "")
-        return _result(True, {"authenticated": bool(token)})
+        auth = config.get("auth", {})
+        token = auth.get("token", "")
+        if not token:
+            return _result(True, {"authenticated": False})
+
+        # Check if token is expired
+        saved_at = auth.get("token_saved_at", 0)
+        expires_in = auth.get("expires", 0)
+        token_expired = False
+        if saved_at and expires_in:
+            token_expired = time.time() > saved_at + expires_in
+        elif not saved_at:
+            # No saved_at means old config — assume potentially expired
+            token_expired = True
+
+        if token_expired:
+            logger.info("Token expired, attempting refresh...")
+            refresh_result = refresh_auth()
+            refresh_data = json.loads(refresh_result)
+            if refresh_data.get("success"):
+                return _result(True, {"authenticated": True, "refreshed": True})
+            else:
+                logger.warning(f"Token refresh failed: {refresh_data.get('error')}")
+                return _result(True, {"authenticated": False, "expired": True})
+
+        return _result(True, {"authenticated": True})
     except Exception as e:
+        logger.error(f"Auth status error: {e}")
         return _result(False, error=str(e))
+
+
+def _ensure_valid_token():
+    """Refresh token if expired. Returns True if token is valid."""
+    try:
+        config_path = _get_config_path()
+        if not config_path or not os.path.exists(config_path):
+            return False
+        with open(config_path) as f:
+            config = json.load(f)
+        auth = config.get("auth", {})
+        saved_at = auth.get("token_saved_at", 0)
+        expires_in = auth.get("expires", 0)
+        token_expired = False
+        if saved_at and expires_in:
+            token_expired = time.time() > saved_at + expires_in
+        elif not saved_at:
+            token_expired = True
+        if token_expired:
+            logger.info("Token expired before API call, refreshing...")
+            result = refresh_auth()
+            data = json.loads(result)
+            return data.get("success", False)
+        return True
+    except Exception as e:
+        logger.error(f"Token validation error: {e}")
+        return False
 
 
 def _get_tidal_api():
@@ -208,6 +263,7 @@ def _get_tidal_api():
 
 def get_track_info(url_or_id):
     try:
+        _ensure_valid_token()
         from tiddl.cli.utils.resource import TidalResource
 
         api = _get_tidal_api()
@@ -259,6 +315,7 @@ def get_download_progress():
 
 def download_track(url_or_id, quality="LOSSLESS"):
     try:
+        _ensure_valid_token()
         from tiddl.cli.utils.resource import TidalResource
         from tiddl.core.metadata import add_track_metadata, Cover
 
@@ -457,6 +514,7 @@ def _get_playlists_path():
 def get_playlist_info(url_or_id):
     """Fetch playlist metadata and all tracks from Tidal."""
     try:
+        _ensure_valid_token()
         import requests as _requests
         from tiddl.cli.utils.resource import TidalResource
 
@@ -611,6 +669,7 @@ def remove_playlist(uuid):
 def search_tidal(query):
     """Search Tidal for tracks, albums, and playlists."""
     try:
+        _ensure_valid_token()
         api = _get_tidal_api()
         results = api.get_search(query)
 

@@ -30,8 +30,18 @@ class AuthManager extends ChangeNotifier {
       if (authResponse != null) {
         final data = jsonDecode(authResponse);
         if (data['success'] == true) {
-          isAuthenticated = data['data']?['authenticated'] == true;
-          status = isAuthenticated ? 'Ready' : 'Not logged in';
+          final authData = data['data'];
+          if (authData?['expired'] == true) {
+            isAuthenticated = false;
+            status = 'Session expired, please log in again';
+          } else {
+            isAuthenticated = authData?['authenticated'] == true;
+            if (authData?['refreshed'] == true) {
+              status = 'Session refreshed';
+            } else {
+              status = isAuthenticated ? 'Ready' : 'Not logged in';
+            }
+          }
           notifyListeners();
           if (isAuthenticated) onAuthenticated?.call();
         }
