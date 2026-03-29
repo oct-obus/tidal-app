@@ -4,6 +4,7 @@ import '../services/channels.dart';
 
 enum SortField { downloadDate, title, artist, fileSize, duration }
 enum GroupBy { none, downloadDate, artist }
+enum DisplayAttribute { artist, duration, fileSize, audioQuality, downloadDate, album }
 
 class SettingsManager extends ChangeNotifier {
   String audioQuality = 'LOSSLESS';
@@ -14,6 +15,19 @@ class SettingsManager extends ChangeNotifier {
   SortField sortField = SortField.downloadDate;
   bool sortAscending = false;
   GroupBy groupBy = GroupBy.none;
+  Set<DisplayAttribute> displayAttributes = {
+    DisplayAttribute.artist,
+    DisplayAttribute.duration,
+  };
+
+  static const displayAttributeLabels = {
+    DisplayAttribute.artist: 'Artist',
+    DisplayAttribute.duration: 'Duration',
+    DisplayAttribute.fileSize: 'File Size',
+    DisplayAttribute.audioQuality: 'Audio Quality',
+    DisplayAttribute.downloadDate: 'Download Date',
+    DisplayAttribute.album: 'Album',
+  };
 
   static const qualityOptions = ['LOW', 'HIGH', 'LOSSLESS', 'HI_RES_LOSSLESS'];
   static const stepOptions = [0.025, 0.05, 0.10, 0.15];
@@ -31,6 +45,13 @@ class SettingsManager extends ChangeNotifier {
         sortField = SortField.values.asNameMap()[data['sortField'] as String? ?? ''] ?? SortField.downloadDate;
         sortAscending = data['sortAscending'] as bool? ?? false;
         groupBy = GroupBy.values.asNameMap()[data['groupBy'] as String? ?? ''] ?? GroupBy.none;
+        final savedAttrs = data['displayAttributes'] as List<dynamic>?;
+        if (savedAttrs != null) {
+          displayAttributes = savedAttrs
+              .map((e) => DisplayAttribute.values.asNameMap()[e as String])
+              .whereType<DisplayAttribute>()
+              .toSet();
+        }
         notifyListeners();
       }
     } catch (e) {
@@ -49,6 +70,7 @@ class SettingsManager extends ChangeNotifier {
         'sortField': sortField.name,
         'sortAscending': sortAscending,
         'groupBy': groupBy.name,
+        'displayAttributes': displayAttributes.map((a) => a.name).toList(),
       });
       await pythonChannel.invokeMethod('saveSettings', {'json': json});
     } catch (e) {

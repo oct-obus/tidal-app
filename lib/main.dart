@@ -712,12 +712,8 @@ class _HomePageState extends State<HomePage> {
     final sizeMB = song['sizeMB'] as num;
     final isActive = _playback.currentFilePath == filePath;
     final name = meta?['title'] as String? ?? LibraryManager.displayName(fileName);
-    final artist = meta?['artist'] as String?;
 
-    String subtitle = '${sizeMB.toStringAsFixed(1)} MB';
-    if (artist != null && _settings.groupBy != GroupBy.artist) {
-      subtitle = '$artist  -  $subtitle';
-    }
+    final subtitle = _buildSongSubtitle(meta, sizeMB);
 
     return Dismissible(
       key: Key(filePath),
@@ -1162,6 +1158,87 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  String _buildSongSubtitle(Map<String, dynamic>? meta, num sizeMB) {
+    final attrs = _settings.displayAttributes;
+    if (attrs.isEmpty) return '';
+
+    final parts = <String>[];
+    for (final attr in DisplayAttribute.values) {
+      if (!attrs.contains(attr)) continue;
+      switch (attr) {
+        case DisplayAttribute.artist:
+          if (_settings.groupBy == GroupBy.artist) continue;
+          final v = meta?['artist'] as String?;
+          if (v != null) parts.add(v);
+        case DisplayAttribute.duration:
+          final v = meta?['duration'];
+          if (v != null) parts.add(_formatMetaDuration(v));
+        case DisplayAttribute.fileSize:
+          final bytes = meta?['fileSize'];
+          if (bytes != null) {
+            parts.add(_formatFileSize(bytes));
+          } else {
+            parts.add('${sizeMB.toStringAsFixed(1)} MB');
+          }
+        case DisplayAttribute.audioQuality:
+          final v = meta?['servedQuality'] as String?;
+          if (v != null) parts.add(v);
+        case DisplayAttribute.downloadDate:
+          final v = meta?['downloadDate'] as String?;
+          if (v != null) parts.add(_formatRelativeDate(v));
+        case DisplayAttribute.album:
+          final v = meta?['album'] as String?;
+          if (v != null) parts.add(v);
+      }
+    }
+
+    if (parts.isEmpty) return '${sizeMB.toStringAsFixed(1)} MB';
+    return parts.join(' \u00b7 ');
+  }
+
+  String _formatRelativeDate(String dateStr) {
+    try {
+      final dt = DateTime.parse(dateStr);
+      final now = DateTime.now();
+      final diff = now.difference(dt);
+      if (diff.inDays == 0) return 'Today';
+      if (diff.inDays == 1) return 'Yesterday';
+      if (diff.inDays < 7) return '${diff.inDays} days ago';
+      if (diff.inDays < 30) {
+        final weeks = diff.inDays ~/ 7;
+        return weeks == 1 ? '1 week ago' : '$weeks weeks ago';
+      }
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      return '${months[dt.month - 1]} ${dt.day}';
+    } catch (_) {
+      return dateStr;
+    }
+  }
+
+  String _buildSongSubtitlePreview() {
+    final attrs = _settings.displayAttributes;
+    final parts = <String>[];
+    for (final attr in DisplayAttribute.values) {
+      if (!attrs.contains(attr)) continue;
+      switch (attr) {
+        case DisplayAttribute.artist:
+          if (_settings.groupBy == GroupBy.artist) continue;
+          parts.add('Artist Name');
+        case DisplayAttribute.duration:
+          parts.add('3:45');
+        case DisplayAttribute.fileSize:
+          parts.add('8.5 MB');
+        case DisplayAttribute.audioQuality:
+          parts.add('LOSSLESS');
+        case DisplayAttribute.downloadDate:
+          parts.add('2 days ago');
+        case DisplayAttribute.album:
+          parts.add('Album Name');
+      }
+    }
+    return parts.isEmpty ? '(nothing)' : parts.join(' \u00b7 ');
+  }
+
   String _formatMetaDuration(dynamic seconds) {
     if (seconds == null) return '-';
     final s = (seconds as num).toInt();
@@ -1220,12 +1297,16 @@ class _HomePageState extends State<HomePage> {
 
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => Padding(
-          padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+        builder: (ctx, setSheetState) => DraggableScrollableSheet(
+          initialChildSize: 0.55,
+          minChildSize: 0.3,
+          maxChildSize: 0.85,
+          expand: false,
+          builder: (ctx, scrollController) => ListView(
+            controller: scrollController,
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
             children: [
               Row(
                 children: [
@@ -1237,6 +1318,10 @@ class _HomePageState extends State<HomePage> {
                         _settings.sortField = SortField.downloadDate;
                         _settings.sortAscending = false;
                         _settings.groupBy = GroupBy.none;
+                        _settings.displayAttributes = {
+                          DisplayAttribute.artist,
+                          DisplayAttribute.duration,
+                        };
                       });
                       setState(() {});
                       _settings.saveSettings(currentSpeed: _playback.playbackSpeed);
@@ -1302,6 +1387,39 @@ class _HomePageState extends State<HomePage> {
                   );
                 }).toList(),
               ),
+              const SizedBox(height: 16),
+              Text('Display', style: theme.textTheme.labelLarge),
+              const SizedBox(height: 4),
+              ...DisplayAttribute.values.map((attr) {
+                final enabled = _settings.displayAttributes.contains(attr);
+                return SwitchListTile(
+                  title: Text(SettingsManager.displayAttributeLabels[attr]!),
+                  value: enabled,
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  onChanged: (val) {
+                    setSheetState(() {
+                      if (val) {
+                        _settings.displayAttributes.add(attr);
+                      } else {
+                        _settings.displayAttributes.remove(attr);
+                      }
+                    });
+                    setState(() {});
+                    _settings.saveSettings(currentSpeed: _playback.playbackSpeed);
+                  },
+                );
+              }),
+              if (_settings.displayAttributes.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    'Preview: ${_buildSongSubtitlePreview()}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
+                  ),
+                ),
               const SizedBox(height: 8),
             ],
           ),
