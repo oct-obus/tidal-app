@@ -25,9 +25,13 @@ class PlaybackManager extends ChangeNotifier {
         notifyListeners();
       } else if (call.method == 'onPlaybackError') {
         final args = call.arguments as Map?;
-        lastError = args?['error']?.toString() ?? 'Unknown playback error';
+        final error = args?['error']?.toString() ?? 'Unknown playback error';
+        debugPrint('PlaybackManager: Error from AudioBridge: $error');
+        stopPlayerStatePolling();
         isPlaying = false;
-        debugPrint('PlaybackManager: Error from AudioBridge: $lastError');
+        if (lastError == null) {
+          lastError = error;
+        }
         notifyListeners();
       }
     });
@@ -51,6 +55,7 @@ class PlaybackManager extends ChangeNotifier {
           if (error != null && lastError == null) {
             lastError = error;
             isPlaying = false;
+            stopPlayerStatePolling();
             notifyListeners();
             return;
           }

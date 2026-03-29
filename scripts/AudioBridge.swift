@@ -238,6 +238,7 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
         ]
         if let error = lastError {
             state["error"] = error
+            lastError = nil // Clear after reporting once
         }
         return state
     }
