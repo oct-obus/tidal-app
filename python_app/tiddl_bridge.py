@@ -344,26 +344,47 @@ def download_track(url_or_id, quality="LOSSLESS"):
 
         stream = api.get_track_stream(resource.id, quality)
 
-        # Use parse_track_stream for segment-level progress
-        try:
-            from tiddl.core.utils.parse import parse_track_stream
-            from requests import Session as ReqSession
+        # Parse manifest to get segment URLs for per-segment progress
+        from tiddl.core.utils.parse import parse_track_stream
+        from requests import Session as ReqSession
 
-            urls, file_ext = parse_track_stream(stream)
-            _write_progress("downloading", _PROGRESS_DOWNLOAD_START, "Starting download...")
+        urls, file_ext = parse_track_stream(stream)
+        _write_progress("downloading", _PROGRESS_DOWNLOAD_START, "Starting download...")
 
-            # Estimate total size from first segment's Content-Length
-            est_total = 0
-            stream_data = b""
-            total_bytes = 0
-            with ReqSession() as s:
+        stream_data = b""
+        total_bytes = 0
+
+        with ReqSession() as s:
+            if len(urls) == 1:
+                # Single URL (BTS manifest): use streaming for byte-level progress
+                resp = s.get(urls[0], timeout=30, stream=True)
+                resp.raise_for_status()
+                content_length = int(resp.headers.get("Content-Length", 0))
+                chunks = []
+                for chunk in resp.iter_content(chunk_size=64 * 1024):
+                    chunks.append(chunk)
+                    total_bytes += len(chunk)
+                    mb_done = total_bytes / (1024 * 1024)
+                    if content_length > 0:
+                        frac = total_bytes / content_length
+                        pct = _PROGRESS_DOWNLOAD_START + int(_PROGRESS_DOWNLOAD_RANGE * frac)
+                        mb_total = content_length / (1024 * 1024)
+                        detail = f"{mb_done:.1f} / {mb_total:.1f} MB"
+                    else:
+                        pct = _PROGRESS_DOWNLOAD_START
+                        detail = f"{mb_done:.1f} MB"
+                    _write_progress("downloading", min(pct, _PROGRESS_DOWNLOAD_START + _PROGRESS_DOWNLOAD_RANGE), detail)
+                stream_data = b"".join(chunks)
+            else:
+                # Multiple URLs (DASH manifest): per-segment progress
+                est_total = 0
                 for i, url in enumerate(urls):
                     resp = s.get(url, timeout=30)
                     resp.raise_for_status()
                     chunk = resp.content
                     stream_data += chunk
                     total_bytes += len(chunk)
-                    if i == 0 and len(urls) > 1:
+                    if i == 0:
                         est_total = len(chunk) * len(urls)
                     pct = _PROGRESS_DOWNLOAD_START + int(_PROGRESS_DOWNLOAD_RANGE * (i + 1) / len(urls))
                     mb_done = total_bytes / (1024 * 1024)
@@ -373,11 +394,6 @@ def download_track(url_or_id, quality="LOSSLESS"):
                     else:
                         detail = f"{mb_done:.1f} MB"
                     _write_progress("downloading", pct, detail)
-        except ImportError:
-            # Fallback: use get_track_stream_data if parse not available
-            from tiddl.core.utils.download import get_track_stream_data
-            _write_progress("downloading", _PROGRESS_DOWNLOAD_START, "Downloading...")
-            stream_data, file_ext = get_track_stream_data(stream)
 
         _write_progress("metadata", _PROGRESS_METADATA, "Adding metadata...")
 
