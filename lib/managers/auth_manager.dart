@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../services/channels.dart';
 
 class AuthManager extends ChangeNotifier {
@@ -53,25 +51,6 @@ class AuthManager extends ChangeNotifier {
       status = 'Init error: $e';
       notifyListeners();
     }
-  }
-
-  /// Returns true if the URL was successfully opened in a browser.
-  Future<bool> openAuthUrl(String url) async {
-    final uri = Uri.parse(url);
-    bool opened = false;
-    try {
-      opened = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
-    } catch (e) {
-      debugPrint('Error in openAuthUrl (inApp): $e');
-    }
-    if (!opened) {
-      try {
-        opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } catch (e) {
-        debugPrint('Error in openAuthUrl (external): $e');
-      }
-    }
-    return opened;
   }
 
   Future<void> startAuth() async {

@@ -18,6 +18,7 @@ import 'widgets/sort_sheet.dart';
 import 'widgets/song_info_sheet.dart';
 import 'widgets/speed_sheet.dart';
 import 'widgets/settings_sheet.dart';
+import 'widgets/auth_webview.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -125,14 +126,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _handleOpenAuthUrl(String url) async {
-    final opened = await _auth.openAuthUrl(url);
-    if (!opened && mounted) {
-      await Clipboard.setData(ClipboardData(text: url));
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Could not open browser. Link copied to clipboard.')),
-      );
-    }
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => AuthWebView(url: url)),
+    );
   }
 
   Future<void> _startAuth() async {
