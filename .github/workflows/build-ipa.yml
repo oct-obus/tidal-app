@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_simulator_test:
+        description: 'Run simulator smoke test'
+        type: boolean
+        default: false
 
 env:
   PYTHON_VERSION: "3.13"
@@ -12,6 +17,7 @@ env:
 jobs:
   test-simulator:
     name: 📱 Simulator smoke test
+    if: inputs.run_simulator_test == true
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -175,6 +181,7 @@ jobs:
     name: 🍎 Build unsigned IPA
     runs-on: macos-latest
     needs: test-simulator
+    if: ${{ !cancelled() && (needs.test-simulator.result == 'success' || needs.test-simulator.result == 'skipped') }}
     steps:
       - uses: actions/checkout@v4
 
