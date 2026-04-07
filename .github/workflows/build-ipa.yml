@@ -1,8 +1,8 @@
 name: Build iOS IPA
 
 on:
-  push:
-    branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       run_simulator_test:
