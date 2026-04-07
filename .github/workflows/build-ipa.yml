@@ -287,28 +287,44 @@ jobs:
 
       - name: Disable code signing in Xcode project
         run: |
-          # Disable signing in xcconfig (works for Runner and pods)
           echo 'CODE_SIGNING_ALLOWED=NO' >> ios/Flutter/Release.xcconfig
           echo 'CODE_SIGNING_REQUIRED=NO' >> ios/Flutter/Release.xcconfig
           echo 'CODE_SIGN_IDENTITY=' >> ios/Flutter/Release.xcconfig
 
       - name: Build iOS (no codesign)
         run: |
-          flutter build ios --release --no-codesign || true
-          # Flutter may report failure but xcodebuild still succeeds
-          # Check both possible output locations
-          if [ -d "build/ios/iphoneos/Runner.app" ]; then
-            echo "✅ Runner.app found at expected location"
-          elif [ -d "build/ios/Release-iphoneos/Runner.app" ]; then
-            echo "⚠️ Runner.app at alternate location, copying..."
-            mkdir -p build/ios/iphoneos
-            cp -R build/ios/Release-iphoneos/Runner.app build/ios/iphoneos/Runner.app
-            echo "✅ Runner.app copied to expected location"
-          else
-            echo "❌ Runner.app not found"
-            find build/ios -name "*.app" 2>/dev/null || echo "No .app found anywhere"
+          flutter build ios --release --no-codesign 2>&1 || true
+          
+          # Find Runner.app with binary
+          RUNNER_APP=""
+          for app in $(find build -name "Runner.app" -type d 2>/dev/null); do
+            if [ -f "$app/Runner" ]; then
+              RUNNER_APP="$app"
+              break
+            fi
+          done
+          
+          if [ -z "$RUNNER_APP" ]; then
+            echo "❌ No Runner.app with binary found"
+            echo "=== Runner.app locations ==="
+            find build -name "Runner.app" -type d 2>/dev/null
+            for app in $(find build -name "Runner.app" -type d 2>/dev/null); do
+              echo "--- $app ---"
+              ls -la "$app/" 2>/dev/null | head -10
+            done
             exit 1
           fi
+          
+          echo "✅ Found Runner.app at: $RUNNER_APP"
+          ls -la "$RUNNER_APP/"
+          
+          # Copy to packaging location
+          mkdir -p build/ios/iphoneos
+          if [ "$RUNNER_APP" != "build/ios/iphoneos/Runner.app" ]; then
+            ditto "$RUNNER_APP" build/ios/iphoneos/Runner.app
+          fi
+          echo "✅ Runner.app ready at build/ios/iphoneos/Runner.app"
+          echo "App bundle size: $(du -sh build/ios/iphoneos/Runner.app | cut -f1)"
 
       - name: Install Python into app bundle
         run: |
@@ -322,11 +338,14 @@ jobs:
         run: |
           mkdir Payload
           mv Runner.app Payload/
-          zip -qq -r -9 TidalApp.ipa Payload
+          zip -qq -r -9 --symlinks TidalApp.ipa Payload
 
       - name: Verify IPA contents
         working-directory: build/ios/iphoneos
         run: |
+          echo "=== Verify app bundle ==="
+          ls -la Payload/Runner.app/Runner || { echo "FATAL: No Runner binary!"; exit 1; }
+          ls -la Payload/Runner.app/Info.plist || { echo "FATAL: No Info.plist!"; exit 1; }
           echo "=== Verify Python bundle ==="
           ls -la Payload/Runner.app/python/ || { echo "FATAL: No python dir!"; exit 1; }
           echo "--- tiddl package ---"
@@ -337,6 +356,8 @@ jobs:
           ls Payload/Runner.app/python/app_packages/
           echo "--- frameworks count ---"
           ls Payload/Runner.app/Frameworks/ | wc -l
+          echo "--- Runner.app top-level contents ---"
+          ls -la Payload/Runner.app/ | head -20
           echo "--- IPA size ---"
           du -sh TidalApp.ipa
 

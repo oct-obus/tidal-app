@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import '../services/channels.dart';
 
 class AuthManager extends ChangeNotifier {
