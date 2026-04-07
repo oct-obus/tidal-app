@@ -13,6 +13,6 @@ jobs:
           curl -X POST \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${{ secrets.DISPATCH_TOKEN }}" \
-            https://api.github.com/repos/obus-schmobus/app-source/dispatches \
+            https://api.github.com/repos/oct-obus/app-source/dispatches \
             -d '{"event_type":"update-source"}'
           echo "✓ Dispatched update to app-source"
