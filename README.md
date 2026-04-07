@@ -1,10 +1,10 @@
 # Tidal Downloader
 
-[![Build](https://github.com/obus-schmobus/tidal-app/actions/workflows/build-ipa.yml/badge.svg)](https://github.com/obus-schmobus/tidal-app/actions/workflows/build-ipa.yml)
+[![Build](https://github.com/oct-obus/tidal-app/actions/workflows/build-ipa.yml/badge.svg)](https://github.com/oct-obus/tidal-app/actions/workflows/build-ipa.yml)
 
 Flutter iOS app for downloading and playing Tidal tracks with variable-speed pitch-shifting playback. Powered by [tiddl](https://github.com/oskvr37/tiddl) running in embedded CPython.
 
-**[Download latest IPA](https://github.com/obus-schmobus/tidal-app/actions/workflows/build-ipa.yml)** - grab the artifact from the most recent green build.
+**[Download latest IPA](https://github.com/oct-obus/tidal-app/actions/workflows/build-ipa.yml)** - grab the artifact from the most recent green build.
 
 ## Features
 
