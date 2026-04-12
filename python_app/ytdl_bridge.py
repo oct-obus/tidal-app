@@ -3,9 +3,10 @@ iOS bridge for yt-dlp (YouTube, SoundCloud, and other platforms).
 Called from Swift PythonBridge via PyRun_SimpleString.
 
 Uses yt-dlp for URL info extraction, then downloads audio streams
-directly using the same chunked HTTP pattern as tiddl_bridge.py.
+directly using chunked HTTP or HLS segment downloading (via m3u8).
 
 Phase 1: SoundCloud (pure Python extractor, no JS needed)
+Phase 1.5: SoundCloud HLS upgrade (AAC 160kbps via m3u8 + fMP4 concat)
 Phase 2: YouTube degraded (limited formats without JS runtime)
 Phase 3: YouTube full (requires ctypes + apple-webkit-jsi plugin)
 """
@@ -131,8 +132,10 @@ def _ydl_opts_base():
 def _select_audio_format(formats, quality="best"):
     """Pick the best audio-only format from a list of yt-dlp format dicts.
 
-    Prefers direct HTTP URLs over HLS/DASH streams since we download
-    with plain ``requests`` (no ffmpeg/m3u8 parser available on iOS).
+    Returns a tuple ``(format_dict, is_hls)`` where ``is_hls`` indicates the
+    format requires HLS segment downloading rather than plain HTTP.
+    Prefers HLS AAC over HTTP MP3 when higher quality, since we can
+    download fMP4 segments with the m3u8 library.
     """
     audio_fmts = [
         f for f in formats
@@ -144,25 +147,107 @@ def _select_audio_format(formats, quality="best"):
     pool = audio_only if audio_only else audio_fmts
 
     if not pool:
-        return None
+        return None, False
 
-    # Partition into direct-HTTP vs streaming (HLS/DASH)
+    # Partition into direct-HTTP vs HLS
     http_pool = [f for f in pool
                  if f.get("protocol", "http") in ("http", "https")]
-    if not http_pool:
-        # HLS/DASH streams require ffmpeg which isn't available on iOS
-        return None
+    hls_pool = [f for f in pool
+                if f.get("protocol") in ("m3u8", "m3u8_native")]
 
-    # Sort by bitrate (descending)
+    # Sort both pools by bitrate (descending)
     http_pool.sort(
         key=lambda f: f.get("abr") or f.get("tbr") or 0, reverse=True)
+    hls_pool.sort(
+        key=lambda f: f.get("abr") or f.get("tbr") or 0, reverse=True)
+
+    best_http = http_pool[0] if http_pool else None
+    best_hls = hls_pool[0] if hls_pool else None
 
     if quality == "low":
-        return http_pool[-1]
-    if quality == "medium" and len(http_pool) > 1:
-        return http_pool[len(http_pool) // 2]
-    # "best" / "high" / default
-    return http_pool[0]
+        if http_pool:
+            return http_pool[-1], False
+        if hls_pool:
+            return hls_pool[-1], True
+        return None, False
+
+    if quality == "medium":
+        if http_pool and len(http_pool) > 1:
+            return http_pool[len(http_pool) // 2], False
+        if http_pool:
+            return http_pool[0], False
+        if hls_pool:
+            return hls_pool[len(hls_pool) // 2] if len(hls_pool) > 1 else hls_pool[0], True
+        return None, False
+
+    # "best" / "high" — prefer higher quality even if HLS
+    if best_http and best_hls:
+        http_br = best_http.get("abr") or best_http.get("tbr") or 0
+        hls_br = best_hls.get("abr") or best_hls.get("tbr") or 0
+        if hls_br > http_br:
+            return best_hls, True
+        return best_http, False
+
+    if best_http:
+        return best_http, False
+    if best_hls:
+        return best_hls, True
+    return None, False
+
+
+def _download_hls_stream(hls_url, http_headers=None):
+    """Download an HLS stream by fetching init + media segments.
+
+    SoundCloud serves HLS AAC as fMP4 (fragmented MP4):
+    init.mp4 (ftyp+moov) + data000.m4s + data001.m4s + ...
+    Simple concatenation produces a valid .m4a file.
+
+    Returns ``(bytes_data, total_bytes)`` or raises on failure.
+    """
+    import m3u8
+    from requests import Session as ReqSession
+
+    playlist = m3u8.load(hls_url, headers=http_headers or {})
+    if not playlist.segments:
+        raise ValueError("HLS playlist has no segments")
+
+    total_segments = len(playlist.segments)
+    chunks = []
+    total_bytes = 0
+
+    with ReqSession() as sess:
+        if http_headers:
+            sess.headers.update(http_headers)
+
+        # Download initialization segment (contains codec metadata)
+        if playlist.segment_map and playlist.segment_map[0] is not None:
+            init_uri = playlist.segment_map[0].absolute_uri
+            resp = sess.get(init_uri, timeout=30)
+            resp.raise_for_status()
+            chunks.append(resp.content)
+            total_bytes += len(resp.content)
+
+        # Download media segments with progress
+        for i, seg in enumerate(playlist.segments):
+            if _check_cancelled():
+                raise InterruptedError("cancelled")
+
+            resp = sess.get(seg.absolute_uri, timeout=30)
+            resp.raise_for_status()
+            chunks.append(resp.content)
+            total_bytes += len(resp.content)
+
+            frac = (i + 1) / total_segments
+            pct = _PROGRESS_DOWNLOAD_START + int(
+                _PROGRESS_DOWNLOAD_RANGE * frac)
+            mb_done = total_bytes / (1024 * 1024)
+            _write_progress(
+                "downloading",
+                min(pct, _PROGRESS_DOWNLOAD_START + _PROGRESS_DOWNLOAD_RANGE),
+                f"{mb_done:.1f} MB ({i+1}/{total_segments} segments)",
+            )
+
+    return b"".join(chunks), total_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -329,21 +414,22 @@ def download_url(url, quality="best"):
             return _result(False, error="cancelled")
 
         # --- 2. Resolve stream URL ---
-        # Always manually select from the formats list to ensure we get a
-        # direct HTTP URL (not HLS/DASH which requires ffmpeg to download).
-        selected = _select_audio_format(
+        selected, is_hls = _select_audio_format(
             info.get("formats", []), quality)
 
         if selected is not None:
             stream_url = selected["url"]
             file_ext = "." + (selected.get("ext") or "m4a")
+            # HLS fMP4 segments produce .m4a regardless of listed ext
+            if is_hls:
+                file_ext = ".m4a"
             abr = selected.get("abr") or selected.get("tbr")
             asr = selected.get("asr")
             acodec = selected.get("acodec")
             http_headers = (selected.get("http_headers")
                             or info.get("http_headers") or {})
         elif info.get("url"):
-            # Some extractors set url directly without a formats list
+            is_hls = False
             stream_url = info["url"]
             file_ext = "." + (info.get("ext") or "m4a")
             abr = info.get("abr") or info.get("tbr")
@@ -356,52 +442,63 @@ def download_url(url, quality="best"):
                 error="No downloadable audio formats found"
                       " (streams may require ffmpeg)")
 
-        # --- 3. Download the stream (chunked HTTP with progress) ---
+        # --- 3. Download the stream ---
         _write_progress("downloading", _PROGRESS_DOWNLOAD_START,
                         "Starting download...")
 
-        total_bytes = 0
-        with ReqSession() as sess:
-            resp = sess.get(stream_url, timeout=60, stream=True,
-                            headers=http_headers)
-            resp.raise_for_status()
-            content_length = int(resp.headers.get("Content-Length", 0))
-            chunks = []
+        if is_hls:
+            # HLS: download init + media segments via m3u8 parser
+            try:
+                stream_data, total_bytes = _download_hls_stream(
+                    stream_url, http_headers)
+            except InterruptedError:
+                _write_progress("cancelled", 0, "Download cancelled")
+                _clear_cancel_flag()
+                return _result(False, error="cancelled")
+        else:
+            # Direct HTTP: chunked download with progress
+            total_bytes = 0
+            with ReqSession() as sess:
+                resp = sess.get(stream_url, timeout=60, stream=True,
+                                headers=http_headers)
+                resp.raise_for_status()
+                content_length = int(resp.headers.get("Content-Length", 0))
+                chunks = []
 
-            for chunk in resp.iter_content(chunk_size=64 * 1024):
-                if _check_cancelled():
-                    resp.close()
-                    _write_progress("cancelled", 0, "Download cancelled")
-                    _clear_cancel_flag()
-                    return _result(False, error="cancelled")
+                for chunk in resp.iter_content(chunk_size=64 * 1024):
+                    if _check_cancelled():
+                        resp.close()
+                        _write_progress("cancelled", 0, "Download cancelled")
+                        _clear_cancel_flag()
+                        return _result(False, error="cancelled")
 
-                chunks.append(chunk)
-                total_bytes += len(chunk)
-                mb_done = total_bytes / (1024 * 1024)
+                    chunks.append(chunk)
+                    total_bytes += len(chunk)
+                    mb_done = total_bytes / (1024 * 1024)
 
-                if content_length > 0:
-                    frac = total_bytes / content_length
-                    pct = _PROGRESS_DOWNLOAD_START + int(
-                        _PROGRESS_DOWNLOAD_RANGE * frac)
-                    mb_total = content_length / (1024 * 1024)
-                    detail = f"{mb_done:.1f} / {mb_total:.1f} MB"
-                else:
-                    pct = _PROGRESS_DOWNLOAD_START
-                    detail = f"{mb_done:.1f} MB"
+                    if content_length > 0:
+                        frac = total_bytes / content_length
+                        pct = _PROGRESS_DOWNLOAD_START + int(
+                            _PROGRESS_DOWNLOAD_RANGE * frac)
+                        mb_total = content_length / (1024 * 1024)
+                        detail = f"{mb_done:.1f} / {mb_total:.1f} MB"
+                    else:
+                        pct = _PROGRESS_DOWNLOAD_START
+                        detail = f"{mb_done:.1f} MB"
 
-                _write_progress(
-                    "downloading",
-                    min(pct,
-                        _PROGRESS_DOWNLOAD_START + _PROGRESS_DOWNLOAD_RANGE),
-                    detail,
-                )
+                    _write_progress(
+                        "downloading",
+                        min(pct,
+                            _PROGRESS_DOWNLOAD_START + _PROGRESS_DOWNLOAD_RANGE),
+                        detail,
+                    )
 
-            stream_data = b"".join(chunks)
+                stream_data = b"".join(chunks)
 
-            if content_length > 0 and total_bytes != content_length:
-                raise IOError(
-                    f"Incomplete download: got {total_bytes}"
-                    f" of {content_length} bytes")
+                if content_length > 0 and total_bytes != content_length:
+                    raise IOError(
+                        f"Incomplete download: got {total_bytes}"
+                        f" of {content_length} bytes")
 
         # --- 4. Write file atomically ---
         _write_progress("metadata", _PROGRESS_METADATA, "Adding metadata...")
