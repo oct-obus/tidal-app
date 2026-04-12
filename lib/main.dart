@@ -193,7 +193,7 @@ class _HomePageState extends State<HomePage> {
     if (input.isEmpty) return;
 
     if (_isExternalUrl(input)) {
-      // YouTube or SoundCloud URL — fetch info first, show preview
+      // YouTube or SoundCloud URL: fetch info first, show preview
       await _showUrlPreview(input);
     } else if (_isTidalUrl(input)) {
       if (_isPlaylistUrl(input)) {

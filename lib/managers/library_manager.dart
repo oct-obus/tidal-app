@@ -352,7 +352,6 @@ class LibraryManager extends ChangeNotifier {
     }
   }
 
-  /// Clear stored YouTube cookies.
   Future<void> clearCookies() async {
     try {
       await pythonChannel.invokeMethod('clearCookies');

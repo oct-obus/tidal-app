@@ -101,7 +101,6 @@ void showSettingsSheet(
               _CookieSection(
                 theme: theme,
                 libraryManager: libraryManager,
-                setSheetState: setSheetState,
               ),
               const SizedBox(height: 16),
               Text('YouTube JS Runtime',
@@ -243,12 +242,10 @@ void showSettingsSheet(
 class _CookieSection extends StatefulWidget {
   final ThemeData theme;
   final LibraryManager libraryManager;
-  final void Function(VoidCallback) setSheetState;
 
   const _CookieSection({
     required this.theme,
     required this.libraryManager,
-    required this.setSheetState,
   });
 
   @override
@@ -445,9 +442,9 @@ class _JsRuntimeSectionState extends State<_JsRuntimeSection> {
 
     String status;
     if (allGood) {
-      status = 'WebKit JSI v$_pluginVersion — anti-throttle active';
+      status = 'WebKit JSI v$_pluginVersion - anti-throttle active';
     } else if (!_ctypes) {
-      status = 'ctypes not available — JS runtime disabled';
+      status = 'ctypes not available - JS runtime disabled';
     } else if (!_pluginInstalled) {
       status = 'Plugin not installed';
     } else {

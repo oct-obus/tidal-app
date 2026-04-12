@@ -4,11 +4,6 @@ Called from Swift PythonBridge via PyRun_SimpleString.
 
 Uses yt-dlp for URL info extraction, then downloads audio streams
 directly using chunked HTTP or HLS segment downloading (via m3u8).
-
-Phase 1: SoundCloud (pure Python extractor, no JS needed)
-Phase 1.5: SoundCloud HLS upgrade (AAC 160kbps via m3u8 + fMP4 concat)
-Phase 2: YouTube degraded (limited formats without JS runtime)
-Phase 3: YouTube full (requires ctypes + apple-webkit-jsi plugin)
 """
 
 import os
@@ -128,7 +123,6 @@ def _clear_cancel_flag():
 
 
 def _detect_platform(url):
-    """Detect which platform a URL belongs to."""
     url_lower = url.lower()
     if any(d in url_lower for d in ("youtube.com", "youtu.be", "music.youtube.com")):
         return "youtube"
@@ -138,7 +132,6 @@ def _detect_platform(url):
 
 
 def _safe_filename(name):
-    """Create a filesystem-safe name."""
     return "".join(c for c in name if c.isalnum() or c in " -_.").strip()
 
 
@@ -224,7 +217,7 @@ def _select_audio_format(formats, quality="best"):
             return hls_pool[len(hls_pool) // 2] if len(hls_pool) > 1 else hls_pool[0], True
         return None, False
 
-    # "best" / "high" — prefer higher quality even if HLS
+    # "best" / "high" -- prefer higher quality even if HLS
     if best_http and best_hls:
         http_br = best_http.get("abr") or best_http.get("tbr") or 0
         hls_br = best_hls.get("abr") or best_hls.get("tbr") or 0
@@ -295,11 +288,10 @@ def _download_hls_stream(hls_url, http_headers=None):
 
 
 # ---------------------------------------------------------------------------
-# Public API — called from Swift via method channel
+# Public API -- called from Swift via method channel
 # ---------------------------------------------------------------------------
 
 def check_ytdlp():
-    """Check if yt-dlp is available and return version info."""
     try:
         import yt_dlp as _yt
         return _result(True, {
@@ -462,7 +454,7 @@ def download_url(url, quality="best"):
     """Download audio from a YouTube / SoundCloud / other URL.
 
     Uses yt-dlp to resolve the direct stream URL then downloads the audio
-    stream ourselves with chunked HTTP progress — identical pattern to
+    stream ourselves with chunked HTTP progress, identical pattern to
     ``tiddl_bridge.download_track``.
 
     Args:
@@ -698,7 +690,6 @@ def download_url(url, quality="best"):
 
 def _tag_audio_file(file_path, file_ext, title, artist, album,
                     thumbnail_url):
-    """Add metadata tags to an audio file using mutagen."""
     from mutagen import File as MutagenFile
 
     audio = MutagenFile(file_path, easy=True)
@@ -716,7 +707,6 @@ def _tag_audio_file(file_path, file_ext, title, artist, album,
 
 
 def _embed_cover_art(file_path, file_ext, thumbnail_url):
-    """Download and embed cover art into the audio file."""
     try:
         from requests import get as http_get
 
