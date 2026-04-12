@@ -281,6 +281,7 @@ class _CookieSectionState extends State<_CookieSection> {
     if (result == null || result.files.isEmpty) return;
     final path = result.files.single.path;
     if (path == null) return;
+    if (!mounted) return;
 
     setState(() => _loading = true);
     final dest = await widget.libraryManager.importCookies(path);

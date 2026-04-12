@@ -240,11 +240,15 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
+    final isPlaylist = info['type'] == 'playlist';
     final title = info['title'] as String? ?? 'Unknown';
-    final artist = info['artist'] as String? ?? 'Unknown';
+    final artist = isPlaylist
+        ? (info['uploader'] as String? ?? 'Unknown')
+        : (info['artist'] as String? ?? 'Unknown');
     final source = info['platform'] as String? ?? 'unknown';
-    final duration = info['duration'];
+    final duration = isPlaylist ? null : info['duration'];
     final coverUrl = info['thumbnailUrl'] as String?;
+    final trackCount = isPlaylist ? (info['trackCount'] as num?)?.toInt() : null;
 
     // Derive quality string from best audio format (highest bitrate)
     String? quality;
@@ -349,6 +353,25 @@ class _HomePageState extends State<HomePage> {
                   ],
                 ],
               ),
+              if (isPlaylist) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(Icons.playlist_play, size: 16,
+                        color: theme.colorScheme.outline),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        trackCount != null
+                            ? 'Playlist ($trackCount tracks) — first track will be downloaded'
+                            : 'Playlist — first track will be downloaded',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: theme.colorScheme.outline),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 20),
               SizedBox(
                 width: double.infinity,
