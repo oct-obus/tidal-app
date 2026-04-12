@@ -77,6 +77,7 @@ jobs:
           python3 -m venv /tmp/pip-venv
           source /tmp/pip-venv/bin/activate
           pip install tiddl --target=python_packages_built --no-compile
+          pip install yt-dlp --target=python_packages_built --no-compile
           pip install certifi --target=python_packages_built --no-compile
           deactivate
 
@@ -96,6 +97,9 @@ jobs:
             if [ -f "python_packages_built/$f" ]; then echo "  ✓ $f"
             else echo "  ✗ $f MISSING!"; exit 1; fi
           done
+          echo "=== Verify yt-dlp package ==="
+          if [ -d "python_packages_built/yt_dlp" ]; then echo "  ✓ yt_dlp/"
+          else echo "  ✗ yt_dlp/ MISSING!"; exit 1; fi
           echo "=== Verify other critical packages ==="
           for pkg in requests urllib3 idna certifi mutagen m3u8 requests_cache; do
             if [ -d "python_packages_built/$pkg" ]; then echo "  ✓ $pkg/"
@@ -148,7 +152,7 @@ jobs:
           echo "$(date +%T) Log collection done ($(wc -l < /tmp/sim_logs.txt) lines)"
 
           echo "=== Log output (filtered) ==="
-          grep -i "python\|bridge\|tiddl\|error\|fatal\|crash\|import" /tmp/sim_logs.txt || echo "(no matching lines)"
+          grep -i "python\|bridge\|tiddl\|ytdl\|error\|fatal\|crash\|import" /tmp/sim_logs.txt || echo "(no matching lines)"
 
           # Cleanup
           xcrun simctl shutdown "$DEVICE_ID" 2>/dev/null || true
@@ -262,6 +266,7 @@ jobs:
           python3 -m venv /tmp/pip-venv
           source /tmp/pip-venv/bin/activate
           pip install tiddl --target=python_packages_built --no-compile
+          pip install yt-dlp --target=python_packages_built --no-compile
           pip install certifi --target=python_packages_built --no-compile
           deactivate
           echo "Installed packages:"
@@ -284,6 +289,9 @@ jobs:
             if [ -f "python_packages_built/$f" ]; then echo "  ✓ $f"
             else echo "  ✗ $f MISSING!"; exit 1; fi
           done
+          echo "=== Verify yt-dlp ==="
+          if [ -d "python_packages_built/yt_dlp" ]; then echo "  ✓ yt_dlp/"
+          else echo "  ✗ yt_dlp/ MISSING!"; exit 1; fi
 
       - name: Disable code signing in Xcode project
         run: |
@@ -350,6 +358,8 @@ jobs:
           ls -la Payload/Runner.app/python/ || { echo "FATAL: No python dir!"; exit 1; }
           echo "--- tiddl package ---"
           ls Payload/Runner.app/python/app_packages/tiddl/ || { echo "FATAL: tiddl missing from bundle!"; exit 1; }
+          echo "--- yt-dlp package ---"
+          ls Payload/Runner.app/python/app_packages/yt_dlp/ || { echo "FATAL: yt_dlp missing from bundle!"; exit 1; }
           echo "--- app code ---"
           ls Payload/Runner.app/python/app/
           echo "--- app packages (all) ---"

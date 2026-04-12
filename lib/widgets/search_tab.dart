@@ -120,10 +120,10 @@ class _SearchTabState extends State<SearchTab> {
                       size: 64,
                       color: theme.colorScheme.outline.withOpacity(0.3)),
                   const SizedBox(height: 12),
-                  Text('Search Tidal',
+                  Text('Search or paste URL',
                       style: theme.textTheme.bodyLarge
                           ?.copyWith(color: theme.colorScheme.outline)),
-                  Text('Find tracks, albums, and playlists',
+                  Text('Tidal search, or paste YouTube / SoundCloud URL',
                       style: theme.textTheme.bodySmall
                           ?.copyWith(color: theme.colorScheme.outline)),
                 ],

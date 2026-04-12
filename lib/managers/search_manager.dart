@@ -139,6 +139,11 @@ class SearchManager extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setSearching(bool value) {
+    isSearching = value;
+    notifyListeners();
+  }
+
   bool get hasResults =>
       tracks.isNotEmpty || albums.isNotEmpty || playlists.isNotEmpty;
 }

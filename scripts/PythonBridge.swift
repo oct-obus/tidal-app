@@ -82,6 +82,14 @@ class PythonBridge: NSObject {
                 print(f'Failed to load tiddl_bridge: {e}')
                 import traceback
                 traceback.print_exc()
+            try:
+                import ytdl_bridge
+                ytdl_bridge.set_documents_dir('\(docs)')
+                print('ytdl_bridge loaded')
+            except Exception as e:
+                print(f'Failed to load ytdl_bridge: {e}')
+                import traceback
+                traceback.print_exc()
             """
             PyRun_SimpleString(initCode)
 
@@ -367,6 +375,37 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(str)
             } else {
                 result(nil)
+            }
+
+        // MARK: - yt-dlp bridge (YouTube / SoundCloud)
+
+        case "checkYtdlp":
+            bridge.runWithResult("ytdl_bridge.check_ytdlp()") { response in
+                result(response)
+            }
+
+        case "getUrlInfo":
+            guard let args = call.arguments as? [String: Any],
+                  let url = args["url"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'url'", details: nil))
+                return
+            }
+            let safeUrl = bridge.pythonEscape(url)
+            bridge.runWithResult("ytdl_bridge.get_url_info('\(safeUrl)')") { response in
+                result(response)
+            }
+
+        case "downloadUrl":
+            guard let args = call.arguments as? [String: Any],
+                  let url = args["url"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'url'", details: nil))
+                return
+            }
+            let quality = (args["quality"] as? String) ?? "best"
+            let safeUrl = bridge.pythonEscape(url)
+            let safeQuality = bridge.pythonEscape(quality)
+            bridge.runWithResult("ytdl_bridge.download_url('\(safeUrl)', '\(safeQuality)')") { response in
+                result(response)
             }
 
         default:

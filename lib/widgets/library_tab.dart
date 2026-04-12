@@ -99,6 +99,7 @@ class LibraryTab extends StatelessWidget {
     final isActive = playback.currentFilePath == filePath;
     final name =
         meta?['title'] as String? ?? LibraryManager.displayName(fileName);
+    final source = meta?['source'] as String?;
 
     final subtitle = _buildSongSubtitle(meta, sizeMB);
 
@@ -133,6 +134,7 @@ class LibraryTab extends StatelessWidget {
         leading: CoverThumbnail(
           coverUrl: meta?['coverUrl'] as String?,
           fallbackIcon: isActive && playback.isPlaying ? Icons.equalizer : Icons.music_note,
+          source: source,
         ),
         title: Text(name,
             maxLines: 1,

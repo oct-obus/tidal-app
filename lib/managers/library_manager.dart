@@ -206,6 +206,77 @@ class LibraryManager extends ChangeNotifier {
     }
   }
 
+  /// Fetches info about a YouTube/SoundCloud URL without downloading.
+  Future<Map<String, dynamic>?> getUrlInfo(String url) async {
+    try {
+      final response = await pythonChannel
+          .invokeMethod<String>('getUrlInfo', {'url': url});
+      if (response == null) return null;
+      final data = jsonDecode(response);
+      if (data['success'] == true) {
+        return data['data'] as Map<String, dynamic>;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error in getUrlInfo: $e');
+      return null;
+    }
+  }
+
+  /// Downloads from a YouTube/SoundCloud URL via yt-dlp backend.
+  Future<Map<String, dynamic>?> downloadUrl(String url) async {
+    isDownloading = true;
+    downloadStep = 'Fetching info...';
+    downloadProgress = 0;
+    _wasCancelled = false;
+    notifyListeners();
+    startProgressPolling();
+
+    try {
+      final response = await pythonChannel
+          .invokeMethod<String>('downloadUrl', {'url': url});
+      if (response == null) {
+        status = 'Download failed: no response';
+        notifyListeners();
+        return null;
+      }
+      final data = jsonDecode(response);
+      if (data['success'] == true) {
+        downloadProgress = 1.0;
+        notifyListeners();
+        await loadLibrary();
+        return data['data'] as Map<String, dynamic>;
+      } else {
+        final error = data['error'] as String? ?? 'Unknown error';
+        if (error == 'cancelled') {
+          _wasCancelled = true;
+          status = '';
+        } else {
+          status = 'Error: $error';
+        }
+        notifyListeners();
+        return null;
+      }
+    } on PlatformException catch (e) {
+      status = 'Error: ${e.message}';
+      notifyListeners();
+      return null;
+    } on MissingPluginException {
+      status = 'Python bridge not available';
+      notifyListeners();
+      return null;
+    } catch (e) {
+      status = 'Error: $e';
+      notifyListeners();
+      return null;
+    } finally {
+      stopProgressPolling();
+      isDownloading = false;
+      downloadStep = '';
+      notifyListeners();
+    }
+  }
+
   bool _wasCancelled = false;
 
   Future<void> cancelDownload() async {

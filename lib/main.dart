@@ -19,6 +19,7 @@ import 'widgets/song_info_sheet.dart';
 import 'widgets/speed_sheet.dart';
 import 'widgets/settings_sheet.dart';
 import 'widgets/auth_webview.dart';
+import 'utils/formatters.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -167,17 +168,34 @@ class _HomePageState extends State<HomePage> {
     return url.contains('/playlist/') || url.startsWith('playlist/');
   }
 
-  bool _isDirectUrl(String input) {
+  bool _isTidalUrl(String input) {
     return input.contains('tidal.com') ||
         input.startsWith('track/') ||
         input.startsWith('playlist/');
+  }
+
+  static final _youtubePattern = RegExp(
+    r'(youtube\.com/watch|youtu\.be/|youtube\.com/shorts/|music\.youtube\.com/watch)',
+    caseSensitive: false,
+  );
+  static final _soundcloudPattern = RegExp(
+    r'soundcloud\.com/',
+    caseSensitive: false,
+  );
+
+  bool _isExternalUrl(String input) {
+    return _youtubePattern.hasMatch(input) ||
+        _soundcloudPattern.hasMatch(input);
   }
 
   Future<void> _handleSearchSubmit() async {
     final input = _searchController.text.trim();
     if (input.isEmpty) return;
 
-    if (_isDirectUrl(input)) {
+    if (_isExternalUrl(input)) {
+      // YouTube or SoundCloud URL — fetch info first, show preview
+      await _showUrlPreview(input);
+    } else if (_isTidalUrl(input)) {
       if (_isPlaylistUrl(input)) {
         await _playlist.fetchPlaylist(input);
         if (_playlist.currentPlaylist != null) {
@@ -187,7 +205,7 @@ class _HomePageState extends State<HomePage> {
           setState(() {});
         }
       } else {
-        // Direct track URL - download it
+        // Direct Tidal track URL - download it
         final result = await _library.download(input, _settings.audioQuality);
         if (result != null) {
           _playback.trackTitle = result['title'] as String?;
@@ -198,6 +216,162 @@ class _HomePageState extends State<HomePage> {
       }
     } else {
       await _search.search(input);
+    }
+  }
+
+  Future<void> _showUrlPreview(String url) async {
+    if (!mounted) return;
+
+    // Show loading indicator
+    setState(() {
+      _library.status = '';
+      _search.setSearching(true);
+    });
+
+    final info = await _library.getUrlInfo(url);
+
+    if (!mounted) return;
+    setState(() => _search.setSearching(false));
+
+    if (info == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not fetch info for this URL')),
+      );
+      return;
+    }
+
+    final title = info['title'] as String? ?? 'Unknown';
+    final artist = info['artist'] as String? ?? 'Unknown';
+    final source = info['platform'] as String? ?? 'unknown';
+    final duration = info['duration'];
+    final coverUrl = info['thumbnailUrl'] as String?;
+
+    // Derive quality string from best audio format (highest bitrate)
+    String? quality;
+    final audioFormats = info['audioFormats'] as List?;
+    if (audioFormats != null && audioFormats.isNotEmpty) {
+      final sorted = List<Map<String, dynamic>>.from(
+          audioFormats.cast<Map<String, dynamic>>());
+      sorted.sort((a, b) =>
+          ((b['abr'] as num?) ?? 0).compareTo((a['abr'] as num?) ?? 0));
+      final best = sorted.first;
+      final abr = best['abr'];
+      final codec = best['acodec'] as String? ?? '';
+      if (abr != null) {
+        quality = '${(abr as num).round()}kbps $codec'.trim();
+      }
+    }
+
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final Color sourceColor;
+        final IconData sourceIcon;
+        final String sourceLabel;
+        switch (source) {
+          case 'youtube':
+            sourceColor = const Color(0xFFFF0000);
+            sourceIcon = Icons.play_arrow;
+            sourceLabel = 'YouTube';
+          case 'soundcloud':
+            sourceColor = const Color(0xFFFF5500);
+            sourceIcon = Icons.cloud;
+            sourceLabel = 'SoundCloud';
+          default:
+            sourceColor = theme.colorScheme.primary;
+            sourceIcon = Icons.music_note;
+            sourceLabel = source;
+        }
+
+        return Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  if (coverUrl != null && coverUrl.isNotEmpty)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(coverUrl, width: 64, height: 64,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Container(
+                            width: 64, height: 64,
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Icon(Icons.music_note, color: theme.colorScheme.outline),
+                          )),
+                    )
+                  else
+                    Container(
+                      width: 64, height: 64,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(Icons.music_note, color: theme.colorScheme.outline),
+                    ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(title, style: theme.textTheme.titleMedium,
+                            maxLines: 2, overflow: TextOverflow.ellipsis),
+                        const SizedBox(height: 4),
+                        Text(artist, style: theme.textTheme.bodyMedium
+                            ?.copyWith(color: theme.colorScheme.outline)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Icon(sourceIcon, size: 16, color: sourceColor),
+                  const SizedBox(width: 4),
+                  Text(sourceLabel, style: theme.textTheme.bodySmall),
+                  if (duration != null) ...[
+                    const SizedBox(width: 12),
+                    Icon(Icons.schedule, size: 14, color: theme.colorScheme.outline),
+                    const SizedBox(width: 4),
+                    Text(formatTrackDuration(duration),
+                        style: theme.textTheme.bodySmall),
+                  ],
+                  if (quality != null) ...[
+                    const SizedBox(width: 12),
+                    Text(quality, style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.outline)),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.download),
+                  label: const Text('Download'),
+                  onPressed: () => Navigator.pop(ctx, true),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    final result = await _library.downloadUrl(url);
+    if (result != null) {
+      _playback.trackTitle = result['title'] as String?;
+      _playback.trackArtist = result['artist'] as String?;
+      _playback.trackAlbum = result['album'] as String?;
+      _searchController.clear();
     }
   }
 

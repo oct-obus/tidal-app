@@ -33,6 +33,10 @@ void showSettingsSheet(
             const SizedBox(height: 20),
             Text('Download Quality',
                 style: theme.textTheme.titleSmall),
+            const SizedBox(height: 4),
+            Text('Tidal',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.outline)),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -57,6 +61,34 @@ void showSettingsSheet(
                   },
                 );
               }).toList(),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Icon(Icons.play_arrow, size: 14, color: const Color(0xFFFF0000)),
+                const SizedBox(width: 4),
+                Text('YouTube',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.outline)),
+                const SizedBox(width: 8),
+                Text('Best available audio (AAC ~128kbps)',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.outline.withOpacity(0.7))),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Icon(Icons.cloud, size: 14, color: const Color(0xFFFF5500)),
+                const SizedBox(width: 4),
+                Text('SoundCloud',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.outline)),
+                const SizedBox(width: 8),
+                Text('MP3 128kbps',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.outline.withOpacity(0.7))),
+              ],
             ),
             const Divider(height: 32),
             Text('Speed Range', style: theme.textTheme.titleSmall),
@@ -166,8 +198,9 @@ void showSettingsSheet(
             ),
             const SizedBox(height: 16),
             Text(
-              'Quality affects new downloads only. '
-              'Hi-Res requires Tidal HiFi Plus.',
+              'Tidal quality affects new Tidal downloads only. '
+              'Hi-Res requires Tidal HiFi Plus. '
+              'YouTube & SoundCloud use best available quality.',
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.outline),
             ),
