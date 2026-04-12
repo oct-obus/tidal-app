@@ -388,6 +388,11 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(response)
             }
 
+        case "checkJsRuntime":
+            bridge.runWithResult("ytdl_bridge.check_js_runtime()") { response in
+                result(response)
+            }
+
         case "getUrlInfo":
             guard let args = call.arguments as? [String: Any],
                   let url = args["url"] as? String else {

@@ -103,6 +103,14 @@ void showSettingsSheet(
                 libraryManager: libraryManager,
                 setSheetState: setSheetState,
               ),
+              const SizedBox(height: 16),
+              Text('YouTube JS Runtime',
+                  style: theme.textTheme.titleSmall),
+              const SizedBox(height: 8),
+              _JsRuntimeSection(
+                theme: theme,
+                libraryManager: libraryManager,
+              ),
             ],
             const Divider(height: 32),
             Text('Speed Range', style: theme.textTheme.titleSmall),
@@ -371,6 +379,89 @@ class _CookieSectionState extends State<_CookieSection> {
           onPressed: _importCookies,
           icon: const Icon(Icons.file_upload, size: 18),
           label: const Text('Import cookies.txt'),
+        ),
+      ],
+    );
+  }
+}
+
+class _JsRuntimeSection extends StatefulWidget {
+  final ThemeData theme;
+  final LibraryManager libraryManager;
+
+  const _JsRuntimeSection({
+    required this.theme,
+    required this.libraryManager,
+  });
+
+  @override
+  State<_JsRuntimeSection> createState() => _JsRuntimeSectionState();
+}
+
+class _JsRuntimeSectionState extends State<_JsRuntimeSection> {
+  bool _loading = true;
+  bool _ctypes = false;
+  bool _pluginInstalled = false;
+  bool _pluginAvailable = false;
+  String? _pluginVersion;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  Future<void> _check() async {
+    final data = await widget.libraryManager.checkJsRuntime();
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _ctypes = data?['ctypes'] == true;
+      _pluginInstalled = data?['pluginInstalled'] == true;
+      _pluginAvailable = data?['pluginAvailable'] == true;
+      _pluginVersion = data?['pluginVersion'] as String?;
+      _error = (data?['pluginError'] ?? data?['ctypesError']) as String?;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const SizedBox(
+        height: 36,
+        child: Center(child: SizedBox(
+          width: 16, height: 16,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        )),
+      );
+    }
+
+    final allGood = _ctypes && _pluginInstalled && _pluginAvailable;
+    final icon = allGood ? Icons.check_circle : Icons.info_outline;
+    final color = allGood
+        ? widget.theme.colorScheme.primary
+        : widget.theme.colorScheme.outline;
+
+    String status;
+    if (allGood) {
+      status = 'WebKit JSI v$_pluginVersion — anti-throttle active';
+    } else if (!_ctypes) {
+      status = 'ctypes not available — JS runtime disabled';
+    } else if (!_pluginInstalled) {
+      status = 'Plugin not installed';
+    } else {
+      status = _error ?? 'Plugin not available on this platform';
+    }
+
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(status,
+              style: widget.theme.textTheme.bodySmall
+                  ?.copyWith(color: widget.theme.colorScheme.outline)),
         ),
       ],
     );

@@ -314,6 +314,68 @@ def check_ytdlp():
         })
 
 
+def check_js_runtime():
+    """Diagnose JS runtime availability for YouTube anti-throttle.
+
+    Checks:
+      1. ctypes C extension importable
+      2. yt-dlp-apple-webkit-jsi plugin installed
+      3. Plugin reports as available (Darwin + WKWebView)
+    """
+    diagnostics = {
+        "ctypes": False,
+        "ctypesError": None,
+        "pluginInstalled": False,
+        "pluginVersion": None,
+        "pluginAvailable": False,
+        "pluginError": None,
+    }
+
+    # 1. Check ctypes
+    try:
+        import ctypes  # noqa: F401
+        diagnostics["ctypes"] = True
+    except ImportError as e:
+        diagnostics["ctypesError"] = str(e)
+
+    # 2. Check plugin installed
+    try:
+        from yt_dlp_plugins.extractor.webkit_jsi import __version__ as wk_ver
+        diagnostics["pluginInstalled"] = True
+        diagnostics["pluginVersion"] = wk_ver
+    except ImportError as e:
+        diagnostics["pluginError"] = str(e)
+        return _result(True, diagnostics)
+
+    # 3. Check plugin availability using its own logic
+    try:
+        from yt_dlp_plugins.extractor.webkit_jsi import AppleWebKitMixin
+        from yt_dlp_plugins.webkit_jsi.lib.api import DarwinMinVer
+        from yt_dlp.utils import version_tuple
+
+        ures = os.uname()
+        diagnostics["platform"] = ures.sysname
+        is_avail = (AppleWebKitMixin.IS_AVAIL
+                    and ures.sysname == "Darwin"
+                    and version_tuple(ures.release) >= DarwinMinVer)
+        diagnostics["pluginAvailable"] = is_avail
+        if not is_avail:
+            if not AppleWebKitMixin.IS_AVAIL:
+                diagnostics["pluginError"] = (
+                    "Plugin disabled (prior WKWebView failure)")
+            elif ures.sysname != "Darwin":
+                diagnostics["pluginError"] = (
+                    f"Not on Darwin (sysname={ures.sysname})")
+            else:
+                diagnostics["pluginError"] = (
+                    f"Darwin version too old ({ures.release})")
+    except Exception as e:
+        diagnostics["platform"] = os.uname().sysname
+        diagnostics["pluginError"] = str(e)
+
+    return _result(True, diagnostics)
+
+
 def get_url_info(url):
     """Extract metadata about a URL without downloading.
 

@@ -315,6 +315,23 @@ class LibraryManager extends ChangeNotifier {
     return name;
   }
 
+  /// Check JS runtime availability for YouTube anti-throttle.
+  Future<Map<String, dynamic>?> checkJsRuntime() async {
+    try {
+      final response =
+          await pythonChannel.invokeMethod<String>('checkJsRuntime');
+      if (response == null) return null;
+      final data = jsonDecode(response);
+      if (data['success'] == true) {
+        return data['data'] as Map<String, dynamic>;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error in checkJsRuntime: $e');
+      return null;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // YouTube Premium cookie management
   // ---------------------------------------------------------------------------
