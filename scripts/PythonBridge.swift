@@ -85,6 +85,10 @@ class PythonBridge: NSObject {
             try:
                 import ytdl_bridge
                 ytdl_bridge.set_documents_dir('\(docs)')
+                _cookies = '\(docs)/cookies.txt'
+                import os as _os
+                if _os.path.isfile(_cookies):
+                    ytdl_bridge.set_cookies_path(_cookies)
                 print('ytdl_bridge loaded')
             except Exception as e:
                 print(f'Failed to load ytdl_bridge: {e}')
@@ -406,6 +410,52 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
             let safeQuality = bridge.pythonEscape(quality)
             bridge.runWithResult("ytdl_bridge.download_url('\(safeUrl)', '\(safeQuality)')") { response in
                 result(response)
+            }
+
+        case "setCookiesPath":
+            guard let args = call.arguments as? [String: Any],
+                  let path = args["path"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'path'", details: nil))
+                return
+            }
+            let safePath = bridge.pythonEscape(path)
+            bridge.runWithResult("ytdl_bridge.set_cookies_path('\(safePath)') or 'ok'") { _ in
+                result(nil)
+            }
+
+        case "clearCookies":
+            bridge.runWithResult("ytdl_bridge.clear_cookies() or 'ok'") { _ in
+                result(nil)
+            }
+
+        case "getCookiesStatus":
+            bridge.runWithResult("ytdl_bridge.get_cookies_status()") { response in
+                result(response)
+            }
+
+        case "importCookies":
+            // Copy the user-selected file to a stable location in Documents
+            guard let args = call.arguments as? [String: Any],
+                  let sourcePath = args["path"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'path'", details: nil))
+                return
+            }
+            let docs = bridge.documentsPath
+            let destPath = "\(docs)/cookies.txt"
+            do {
+                let fm = FileManager.default
+                if fm.fileExists(atPath: destPath) {
+                    try fm.removeItem(atPath: destPath)
+                }
+                try fm.copyItem(atPath: sourcePath, toPath: destPath)
+                let safeDest = bridge.pythonEscape(destPath)
+                bridge.runWithResult("ytdl_bridge.set_cookies_path('\(safeDest)') or 'ok'") { _ in
+                    result(destPath)
+                }
+            } catch {
+                result(FlutterError(code: "COPY_ERROR",
+                                    message: "Failed to import cookies: \(error.localizedDescription)",
+                                    details: nil))
             }
 
         default:

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import '../managers/settings_manager.dart';
 import '../managers/auth_manager.dart';
 import '../managers/playback_manager.dart';
+import '../managers/library_manager.dart';
 
 void showSettingsSheet(
   BuildContext context,
@@ -9,8 +11,9 @@ void showSettingsSheet(
   SettingsManager settings,
   AuthManager auth,
   PlaybackManager playback,
-  VoidCallback onChanged,
-) {
+  VoidCallback onChanged, {
+  LibraryManager? libraryManager,
+}) {
   final minCtrl = TextEditingController(
       text: (settings.speedMin * 100).round().toString());
   final maxCtrl = TextEditingController(
@@ -71,7 +74,7 @@ void showSettingsSheet(
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.outline)),
                 const SizedBox(width: 8),
-                Text('Best available audio (AAC ~128kbps)',
+                Text('AAC ~128kbps (256kbps with Premium cookies)',
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.outline.withOpacity(0.7))),
               ],
@@ -85,11 +88,22 @@ void showSettingsSheet(
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.outline)),
                 const SizedBox(width: 8),
-                Text('MP3 128kbps',
+                Text('AAC 160kbps',
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.outline.withOpacity(0.7))),
               ],
             ),
+            if (libraryManager != null) ...[
+              const SizedBox(height: 16),
+              Text('YouTube Premium Cookies',
+                  style: theme.textTheme.titleSmall),
+              const SizedBox(height: 8),
+              _CookieSection(
+                theme: theme,
+                libraryManager: libraryManager,
+                setSheetState: setSheetState,
+              ),
+            ],
             const Divider(height: 32),
             Text('Speed Range', style: theme.textTheme.titleSmall),
             const SizedBox(height: 8),
@@ -200,7 +214,7 @@ void showSettingsSheet(
             Text(
               'Tidal quality affects new Tidal downloads only. '
               'Hi-Res requires Tidal HiFi Plus. '
-              'YouTube & SoundCloud use best available quality.',
+              'YouTube Premium cookies unlock 256kbps AAC.',
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.outline),
             ),
@@ -216,4 +230,149 @@ void showSettingsSheet(
       ),
     ),
   );
+}
+
+class _CookieSection extends StatefulWidget {
+  final ThemeData theme;
+  final LibraryManager libraryManager;
+  final void Function(VoidCallback) setSheetState;
+
+  const _CookieSection({
+    required this.theme,
+    required this.libraryManager,
+    required this.setSheetState,
+  });
+
+  @override
+  State<_CookieSection> createState() => _CookieSectionState();
+}
+
+class _CookieSectionState extends State<_CookieSection> {
+  bool _loading = true;
+  bool _hasCookies = false;
+  String? _modifiedAt;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStatus();
+  }
+
+  Future<void> _loadStatus() async {
+    final status = await widget.libraryManager.getCookiesStatus();
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _hasCookies = status?['hasCookies'] == true;
+      _modifiedAt = status?['modifiedAt'] as String?;
+    });
+  }
+
+  Future<void> _importCookies() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      allowMultiple: false,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final path = result.files.single.path;
+    if (path == null) return;
+
+    setState(() => _loading = true);
+    final dest = await widget.libraryManager.importCookies(path);
+    if (dest != null) {
+      await _loadStatus();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('YouTube cookies imported ✓')),
+        );
+      }
+    } else {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to import cookies')),
+        );
+      }
+    }
+  }
+
+  Future<void> _clearCookies() async {
+    await widget.libraryManager.clearCookies();
+    await _loadStatus();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('YouTube cookies cleared')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const SizedBox(
+        height: 36,
+        child: Center(child: SizedBox(
+          width: 16, height: 16,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        )),
+      );
+    }
+
+    if (_hasCookies) {
+      String subtitle = 'Cookies loaded';
+      if (_modifiedAt != null) {
+        try {
+          final dt = DateTime.parse(_modifiedAt!);
+          final diff = DateTime.now().difference(dt);
+          if (diff.inDays > 0) {
+            subtitle += ' (${diff.inDays}d ago)';
+          } else if (diff.inHours > 0) {
+            subtitle += ' (${diff.inHours}h ago)';
+          }
+        } catch (_) {}
+      }
+      return Row(
+        children: [
+          Icon(Icons.check_circle, size: 16,
+              color: widget.theme.colorScheme.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(subtitle,
+                style: widget.theme.textTheme.bodySmall
+                    ?.copyWith(color: widget.theme.colorScheme.outline)),
+          ),
+          TextButton(
+            onPressed: _importCookies,
+            child: const Text('Replace'),
+          ),
+          TextButton(
+            onPressed: _clearCookies,
+            style: TextButton.styleFrom(
+              foregroundColor: widget.theme.colorScheme.error,
+            ),
+            child: const Text('Clear'),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Import a cookies.txt file from Firefox to unlock '
+          '256kbps AAC on YouTube.',
+          style: widget.theme.textTheme.bodySmall
+              ?.copyWith(color: widget.theme.colorScheme.outline),
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: _importCookies,
+          icon: const Icon(Icons.file_upload, size: 18),
+          label: const Text('Import cookies.txt'),
+        ),
+      ],
+    );
+  }
 }

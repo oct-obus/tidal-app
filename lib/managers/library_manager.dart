@@ -315,6 +315,52 @@ class LibraryManager extends ChangeNotifier {
     return name;
   }
 
+  // ---------------------------------------------------------------------------
+  // YouTube Premium cookie management
+  // ---------------------------------------------------------------------------
+
+  /// Import a cookies.txt file for YouTube Premium (unlocks 256kbps AAC).
+  /// Returns the destination path on success, null on failure.
+  Future<String?> importCookies(String sourcePath) async {
+    try {
+      final destPath = await pythonChannel
+          .invokeMethod<String>('importCookies', {'path': sourcePath});
+      return destPath;
+    } on PlatformException catch (e) {
+      debugPrint('Error importing cookies: ${e.message}');
+      return null;
+    } catch (e) {
+      debugPrint('Error importing cookies: $e');
+      return null;
+    }
+  }
+
+  /// Clear stored YouTube cookies.
+  Future<void> clearCookies() async {
+    try {
+      await pythonChannel.invokeMethod('clearCookies');
+    } catch (e) {
+      debugPrint('Error clearing cookies: $e');
+    }
+  }
+
+  /// Check if cookies are loaded. Returns {hasCookies, path, sizeBytes, modifiedAt}.
+  Future<Map<String, dynamic>?> getCookiesStatus() async {
+    try {
+      final response =
+          await pythonChannel.invokeMethod<String>('getCookiesStatus');
+      if (response == null) return null;
+      final data = jsonDecode(response);
+      if (data['success'] == true) {
+        return data['data'] as Map<String, dynamic>;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error in getCookiesStatus: $e');
+      return null;
+    }
+  }
+
   @override
   void dispose() {
     _isDisposed = true;

@@ -522,7 +522,8 @@ class _HomePageState extends State<HomePage> {
             IconButton(
                 icon: const Icon(Icons.settings),
                 onPressed: () => showSettingsSheet(context, theme, _settings,
-                    _auth, _playback, () => setState(() {})),
+                    _auth, _playback, () => setState(() {}),
+                    libraryManager: _library),
                 tooltip: 'Settings'),
             IconButton(
                 icon: const Icon(Icons.logout),

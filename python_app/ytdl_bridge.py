@@ -30,6 +30,7 @@ _PROGRESS_METADATA = 92
 _PROGRESS_DONE = 100
 
 DOCUMENTS_DIR = None
+_COOKIES_PATH = None  # Path to Netscape cookies.txt for YouTube Premium
 
 # Test critical import eagerly at load time
 try:
@@ -42,6 +43,46 @@ except Exception as _e:
 def set_documents_dir(path):
     global DOCUMENTS_DIR
     DOCUMENTS_DIR = path
+
+
+def set_cookies_path(path):
+    """Set the path to a Netscape cookies.txt file for YouTube Premium."""
+    global _COOKIES_PATH
+    if path and os.path.isfile(path):
+        _COOKIES_PATH = path
+        logger.info(f"Cookies file set: {path}")
+    else:
+        _COOKIES_PATH = None
+        if path:
+            logger.warning(f"Cookies file not found: {path}")
+
+
+def clear_cookies():
+    """Remove the cookies file and clear the path."""
+    global _COOKIES_PATH
+    if _COOKIES_PATH and os.path.isfile(_COOKIES_PATH):
+        try:
+            os.remove(_COOKIES_PATH)
+        except OSError as e:
+            logger.warning(f"Could not delete cookies file: {e}")
+    _COOKIES_PATH = None
+    logger.info("Cookies cleared")
+
+
+def get_cookies_status():
+    """Check cookies file status. Returns JSON."""
+    if not _COOKIES_PATH or not os.path.isfile(_COOKIES_PATH):
+        return _result(True, {"hasCookies": False})
+    try:
+        stat = os.stat(_COOKIES_PATH)
+        return _result(True, {
+            "hasCookies": True,
+            "path": _COOKIES_PATH,
+            "sizeBytes": stat.st_size,
+            "modifiedAt": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        })
+    except OSError as e:
+        return _result(True, {"hasCookies": False, "error": str(e)})
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +163,9 @@ def _ydl_opts_base():
         cache_dir = os.path.join(DOCUMENTS_DIR, "cache", "ytdl")
         os.makedirs(cache_dir, exist_ok=True)
         opts["cachedir"] = cache_dir
+    # Inject cookies for YouTube Premium (unlocks 256kbps AAC)
+    if _COOKIES_PATH and os.path.isfile(_COOKIES_PATH):
+        opts["cookiefile"] = _COOKIES_PATH
     return opts
 
 
