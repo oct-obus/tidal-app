@@ -10,8 +10,10 @@ import os
 import sys
 import json
 import logging
+import time
 import traceback
 from datetime import datetime
+from urllib.parse import urlparse, parse_qs
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ytdl_bridge")
@@ -150,6 +152,10 @@ def _ydl_opts_base():
         "nocheckcertificate": False,
         # Disable all post-processors (no ffmpeg on iOS)
         "postprocessors": [],
+        # Explicit player client preference for YouTube anti-throttle.
+        # ios returns HLS streams that bypass n-param throttling;
+        # mweb is the fallback if ios fails.
+        "extractor_args": {"youtube": {"player_client": ["ios", "mweb"]}},
     }
     # Use Documents/cache for yt-dlp cache
     if DOCUMENTS_DIR:
@@ -160,6 +166,43 @@ def _ydl_opts_base():
     if _COOKIES_PATH and os.path.isfile(_COOKIES_PATH):
         opts["cookiefile"] = _COOKIES_PATH
     return opts
+
+
+# ---------------------------------------------------------------------------
+# Throttle detection
+# ---------------------------------------------------------------------------
+
+_THROTTLE_SPEED_THRESHOLD = 100 * 1024  # 100 KB/s — below this is suspicious
+
+
+def _check_throttle_hint(stream_url, platform):
+    """Heuristic: detect likely YouTube throttle from the stream URL.
+
+    YouTube throttled URLs still contain an ``n=`` query parameter with
+    a long base64 value.  When yt-dlp successfully decodes it the value
+    is replaced with a much shorter token (typically ≤8 chars).
+    If the n-param is ≥32 chars it was probably NOT decoded → likely throttled.
+
+    Returns a warning string or None.
+    """
+    if platform != "youtube":
+        return None
+    try:
+        qs = parse_qs(urlparse(stream_url).query)
+        n_vals = qs.get("n")
+        if n_vals:
+            n_val = n_vals[0]
+            if len(n_val) >= 32:
+                logger.warning(
+                    f"Possible throttle: n-param length {len(n_val)} "
+                    f"(likely undecoded)")
+                return (
+                    f"⚠ Possible YouTube throttle detected "
+                    f"(n-param length {len(n_val)}). "
+                    f"Download may be slow.")
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +294,8 @@ def _download_hls_stream(hls_url, http_headers=None):
     total_segments = len(playlist.segments)
     chunks = []
     total_bytes = 0
+    speed_window_start = time.monotonic()
+    speed_window_bytes = 0
 
     with ReqSession() as sess:
         if http_headers:
@@ -264,7 +309,7 @@ def _download_hls_stream(hls_url, http_headers=None):
             chunks.append(resp.content)
             total_bytes += len(resp.content)
 
-        # Download media segments with progress
+        # Download media segments with progress + speed
         for i, seg in enumerate(playlist.segments):
             if _check_cancelled():
                 raise InterruptedError("cancelled")
@@ -272,16 +317,30 @@ def _download_hls_stream(hls_url, http_headers=None):
             resp = sess.get(seg.absolute_uri, timeout=30)
             resp.raise_for_status()
             chunks.append(resp.content)
-            total_bytes += len(resp.content)
+            seg_len = len(resp.content)
+            total_bytes += seg_len
+            speed_window_bytes += seg_len
+
+            # Calculate speed
+            now = time.monotonic()
+            window_elapsed = now - speed_window_start
+            if window_elapsed >= 2.0:
+                speed_kbps = speed_window_bytes / window_elapsed / 1024
+                speed_window_start = now
+                speed_window_bytes = 0
+            else:
+                speed_kbps = None
 
             frac = (i + 1) / total_segments
             pct = _PROGRESS_DOWNLOAD_START + int(
                 _PROGRESS_DOWNLOAD_RANGE * frac)
             mb_done = total_bytes / (1024 * 1024)
+            speed_str = (f" @ {speed_kbps:.0f} KB/s"
+                         if speed_kbps is not None else "")
             _write_progress(
                 "downloading",
                 min(pct, _PROGRESS_DOWNLOAD_START + _PROGRESS_DOWNLOAD_RANGE),
-                f"{mb_done:.1f} MB ({i+1}/{total_segments} segments)",
+                f"{mb_done:.1f} MB ({i+1}/{total_segments} seg){speed_str}",
             )
 
     return b"".join(chunks), total_bytes
@@ -540,9 +599,22 @@ def download_url(url, quality="best"):
                 error="No downloadable audio formats found"
                       " (streams may require ffmpeg)")
 
+        # Log format selection for diagnostics
+        logger.info(
+            f"Format: protocol={'HLS' if is_hls else 'HTTP'} "
+            f"codec={acodec} abr={abr} ext={file_ext}")
+
+        # --- 2b. Throttle detection (YouTube only) ---
+        throttle_warning = _check_throttle_hint(stream_url, platform)
+        if throttle_warning:
+            _write_progress("downloading", _PROGRESS_DOWNLOAD_START,
+                            throttle_warning)
+
         # --- 3. Download the stream ---
         _write_progress("downloading", _PROGRESS_DOWNLOAD_START,
                         "Starting download...")
+
+        dl_start_time = time.monotonic()
 
         if is_hls:
             # HLS: download init + media segments via m3u8 parser
@@ -554,8 +626,12 @@ def download_url(url, quality="best"):
                 _clear_cancel_flag()
                 return _result(False, error="cancelled")
         else:
-            # Direct HTTP: chunked download with progress
+            # Direct HTTP: chunked download with progress + speed tracking
             total_bytes = 0
+            speed_window_start = time.monotonic()
+            speed_window_bytes = 0
+            throttle_warned = False
+
             with ReqSession() as sess:
                 resp = sess.get(stream_url, timeout=60, stream=True,
                                 headers=http_headers)
@@ -572,17 +648,44 @@ def download_url(url, quality="best"):
 
                     chunks.append(chunk)
                     total_bytes += len(chunk)
+                    speed_window_bytes += len(chunk)
                     mb_done = total_bytes / (1024 * 1024)
+
+                    # Calculate rolling speed every 2 seconds
+                    now = time.monotonic()
+                    window_elapsed = now - speed_window_start
+                    if window_elapsed >= 2.0:
+                        speed_bps = speed_window_bytes / window_elapsed
+                        speed_kbps = speed_bps / 1024
+                        speed_window_start = now
+                        speed_window_bytes = 0
+
+                        # Warn if speed is suspiciously low after initial ramp
+                        if (not throttle_warned
+                                and total_bytes > 256 * 1024
+                                and speed_bps < _THROTTLE_SPEED_THRESHOLD):
+                            throttle_warned = True
+                            logger.warning(
+                                f"Low download speed: {speed_kbps:.0f} KB/s "
+                                f"(threshold: "
+                                f"{_THROTTLE_SPEED_THRESHOLD // 1024} KB/s)")
+                    else:
+                        speed_kbps = None
 
                     if content_length > 0:
                         frac = total_bytes / content_length
                         pct = _PROGRESS_DOWNLOAD_START + int(
                             _PROGRESS_DOWNLOAD_RANGE * frac)
                         mb_total = content_length / (1024 * 1024)
-                        detail = f"{mb_done:.1f} / {mb_total:.1f} MB"
+                        speed_str = (f" @ {speed_kbps:.0f} KB/s"
+                                     if speed_kbps is not None else "")
+                        detail = (f"{mb_done:.1f} / {mb_total:.1f} MB"
+                                  f"{speed_str}")
                     else:
                         pct = _PROGRESS_DOWNLOAD_START
-                        detail = f"{mb_done:.1f} MB"
+                        speed_str = (f" @ {speed_kbps:.0f} KB/s"
+                                     if speed_kbps is not None else "")
+                        detail = f"{mb_done:.1f} MB{speed_str}"
 
                     _write_progress(
                         "downloading",
@@ -597,6 +700,14 @@ def download_url(url, quality="best"):
                     raise IOError(
                         f"Incomplete download: got {total_bytes}"
                         f" of {content_length} bytes")
+
+        # Log final download stats
+        dl_elapsed = time.monotonic() - dl_start_time
+        if dl_elapsed > 0:
+            avg_speed = total_bytes / dl_elapsed / 1024
+            logger.info(
+                f"Download complete: {total_bytes / (1024*1024):.1f} MB "
+                f"in {dl_elapsed:.1f}s ({avg_speed:.0f} KB/s avg)")
 
         # --- 4. Write file atomically ---
         _write_progress("metadata", _PROGRESS_METADATA, "Adding metadata...")
@@ -677,6 +788,13 @@ def download_url(url, quality="best"):
             "quality": served_quality or quality,
             "fileExtension": file_ext,
             "source": platform,
+            "downloadStats": {
+                "totalBytes": total_bytes,
+                "elapsedSec": round(dl_elapsed, 1) if dl_elapsed > 0 else 0,
+                "avgSpeedKBps": round(avg_speed) if dl_elapsed > 0 else 0,
+                "protocol": "HLS" if is_hls else "HTTP",
+                "throttleWarning": throttle_warning,
+            },
         })
     except Exception as e:
         _write_progress("error", 0, str(e))
