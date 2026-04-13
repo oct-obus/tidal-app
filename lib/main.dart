@@ -9,6 +9,7 @@ import 'managers/settings_manager.dart';
 import 'managers/search_manager.dart';
 import 'managers/playlist_manager.dart';
 import 'services/channels.dart';
+import 'services/link_resolver.dart';
 import 'widgets/auth_content.dart';
 import 'widgets/library_tab.dart';
 import 'widgets/search_tab.dart';
@@ -182,17 +183,27 @@ class _HomePageState extends State<HomePage> {
     r'soundcloud\.com/',
     caseSensitive: false,
   );
+  static final _spotifyPattern = RegExp(
+    r'open\.spotify\.com/track/',
+    caseSensitive: false,
+  );
 
   bool _isExternalUrl(String input) {
     return _youtubePattern.hasMatch(input) ||
         _soundcloudPattern.hasMatch(input);
   }
 
+  bool _isSpotifyUrl(String input) {
+    return _spotifyPattern.hasMatch(input);
+  }
+
   Future<void> _handleSearchSubmit() async {
     final input = _searchController.text.trim();
     if (input.isEmpty) return;
 
-    if (_isExternalUrl(input)) {
+    if (_isSpotifyUrl(input)) {
+      await _handleSpotifyLink(input);
+    } else if (_isExternalUrl(input)) {
       // YouTube or SoundCloud URL: fetch info first, show preview
       await _showUrlPreview(input);
     } else if (_isTidalUrl(input)) {
@@ -266,7 +277,7 @@ class _HomePageState extends State<HomePage> {
       }
     }
 
-    final confirmed = await showModalBottomSheet<bool>(
+    final action = await showModalBottomSheet<String>(
       context: context,
       builder: (ctx) {
         final theme = Theme.of(ctx);
@@ -377,7 +388,153 @@ class _HomePageState extends State<HomePage> {
                 width: double.infinity,
                 child: FilledButton.icon(
                   icon: const Icon(Icons.download),
-                  label: const Text('Download'),
+                  label: Text('Download from $sourceLabel'),
+                  onPressed: () => Navigator.pop(ctx, 'download'),
+                ),
+              ),
+              if (!isPlaylist) ...[
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.search),
+                    label: const Text('Search on Tidal'),
+                    onPressed: () => Navigator.pop(ctx, 'search_tidal'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+
+    if (action == null || !mounted) return;
+
+    if (action == 'search_tidal') {
+      // Clean up the title for better Tidal search results
+      var searchTitle = title;
+      if (source == 'youtube') {
+        searchTitle = LinkResolver.cleanYouTubeTitle(searchTitle);
+      }
+      await _searchTidalForTrack(searchTitle, artist);
+      return;
+    }
+
+    final result = await _library.downloadUrl(url);
+    if (result != null) {
+      _playback.trackTitle = result['title'] as String?;
+      _playback.trackArtist = result['artist'] as String?;
+      _playback.trackAlbum = result['album'] as String?;
+      _searchController.clear();
+    }
+  }
+
+  Future<void> _handleSpotifyLink(String url) async {
+    if (!mounted) return;
+
+    setState(() {
+      _library.status = '';
+      _search.setSearching(true);
+    });
+
+    final resolved = await LinkResolver.resolveSpotify(url);
+
+    if (!mounted) return;
+    setState(() => _search.setSearching(false));
+
+    if (resolved == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not resolve Spotify link')),
+      );
+      return;
+    }
+
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        const spotifyGreen = Color(0xFF1DB954);
+
+        return Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  if (resolved.thumbnailUrl != null)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(
+                        resolved.thumbnailUrl!,
+                        width: 64,
+                        height: 64,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          width: 64,
+                          height: 64,
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(Icons.music_note,
+                              color: theme.colorScheme.outline),
+                        ),
+                      ),
+                    )
+                  else
+                    Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(Icons.music_note,
+                          color: theme.colorScheme.outline),
+                    ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(resolved.title,
+                            style: theme.textTheme.titleMedium,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis),
+                        const SizedBox(height: 4),
+                        Text(resolved.artist,
+                            style: theme.textTheme.bodyMedium
+                                ?.copyWith(color: theme.colorScheme.outline)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  const Icon(Icons.music_note, size: 16, color: spotifyGreen),
+                  const SizedBox(width: 4),
+                  Text('Spotify',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: spotifyGreen)),
+                  const SizedBox(width: 8),
+                  Icon(Icons.arrow_forward,
+                      size: 14, color: theme.colorScheme.outline),
+                  const SizedBox(width: 8),
+                  Text('Tidal search',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.outline)),
+                ],
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.search),
+                  label: const Text('Search on Tidal'),
                   onPressed: () => Navigator.pop(ctx, true),
                 ),
               ),
@@ -388,14 +545,14 @@ class _HomePageState extends State<HomePage> {
     );
 
     if (confirmed != true || !mounted) return;
+    await _searchTidalForTrack(resolved.title, resolved.artist);
+  }
 
-    final result = await _library.downloadUrl(url);
-    if (result != null) {
-      _playback.trackTitle = result['title'] as String?;
-      _playback.trackArtist = result['artist'] as String?;
-      _playback.trackAlbum = result['album'] as String?;
-      _searchController.clear();
-    }
+  Future<void> _searchTidalForTrack(String title, String artist) async {
+    final query = artist != 'Unknown' ? '$artist $title' : title;
+    _searchController.text = query;
+    await _search.search(query);
+    if (mounted) setState(() {});
   }
 
   Future<void> _downloadTrackFromSearch(Map<String, dynamic> track) async {

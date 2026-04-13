@@ -123,7 +123,7 @@ class _SearchTabState extends State<SearchTab> {
                   Text('Search or paste URL',
                       style: theme.textTheme.bodyLarge
                           ?.copyWith(color: theme.colorScheme.outline)),
-                  Text('Tidal search, or paste YouTube / SoundCloud URL',
+                  Text('Tidal search, or paste Spotify / YouTube / SoundCloud URL',
                       style: theme.textTheme.bodySmall
                           ?.copyWith(color: theme.colorScheme.outline)),
                 ],
