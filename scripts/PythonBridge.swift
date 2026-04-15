@@ -394,6 +394,16 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(response)
             }
 
+        case "getLogs":
+            bridge.runWithResult("ytdl_bridge.get_log()") { response in
+                result(response)
+            }
+
+        case "clearLogs":
+            bridge.runWithResult("ytdl_bridge.clear_log()") { response in
+                result(response)
+            }
+
         case "getUrlInfo":
             guard let args = call.arguments as? [String: Any],
                   let url = args["url"] as? String else {

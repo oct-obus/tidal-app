@@ -18,6 +18,9 @@ class LibraryManager extends ChangeNotifier {
   double downloadProgress = 0;
   String status = '';
 
+  /// Last error message from getUrlInfo (null on success).
+  String? lastUrlError;
+
   Timer? _progressTimer;
   bool _isDisposed = false;
 
@@ -208,17 +211,23 @@ class LibraryManager extends ChangeNotifier {
 
   /// Fetches info about a YouTube/SoundCloud URL without downloading.
   Future<Map<String, dynamic>?> getUrlInfo(String url) async {
+    lastUrlError = null;
     try {
       final response = await pythonChannel
           .invokeMethod<String>('getUrlInfo', {'url': url});
-      if (response == null) return null;
+      if (response == null) {
+        lastUrlError = 'No response from Python bridge';
+        return null;
+      }
       final data = jsonDecode(response);
       if (data['success'] == true) {
         return data['data'] as Map<String, dynamic>;
       }
+      lastUrlError = data['error'] as String? ?? 'Unknown error';
       return null;
     } catch (e) {
       debugPrint('Error in getUrlInfo: $e');
+      lastUrlError = e.toString();
       return null;
     }
   }
@@ -392,6 +401,32 @@ class LibraryManager extends ChangeNotifier {
     } catch (e) {
       debugPrint('Error in extractYouTubeCookies: $e');
       return null;
+    }
+  }
+
+  /// Get debug logs from the Python backend.
+  Future<String?> getLogs() async {
+    try {
+      final response =
+          await pythonChannel.invokeMethod<String>('getLogs');
+      if (response == null) return null;
+      final data = jsonDecode(response);
+      if (data['success'] == true) {
+        return data['data']?['content'] as String?;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error in getLogs: $e');
+      return null;
+    }
+  }
+
+  /// Clear debug logs.
+  Future<void> clearLogs() async {
+    try {
+      await pythonChannel.invokeMethod<String>('clearLogs');
+    } catch (e) {
+      debugPrint('Error in clearLogs: $e');
     }
   }
 

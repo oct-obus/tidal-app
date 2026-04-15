@@ -245,8 +245,14 @@ class _HomePageState extends State<HomePage> {
     setState(() => _search.setSearching(false));
 
     if (info == null) {
+      final errorMsg = _library.lastUrlError;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not fetch info for this URL')),
+        SnackBar(
+          content: Text(errorMsg != null
+              ? 'Could not fetch info: $errorMsg'
+              : 'Could not fetch info for this URL'),
+          duration: const Duration(seconds: 5),
+        ),
       );
       return;
     }

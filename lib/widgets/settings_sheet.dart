@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import '../managers/settings_manager.dart';
 import '../managers/auth_manager.dart';
@@ -108,6 +109,14 @@ void showSettingsSheet(
                   style: theme.textTheme.titleSmall),
               const SizedBox(height: 8),
               _JsRuntimeSection(
+                theme: theme,
+                libraryManager: libraryManager,
+              ),
+              const SizedBox(height: 16),
+              Text('Debug Log',
+                  style: theme.textTheme.titleSmall),
+              const SizedBox(height: 8),
+              _LogSection(
                 theme: theme,
                 libraryManager: libraryManager,
               ),
@@ -488,6 +497,106 @@ class _JsRuntimeSectionState extends State<_JsRuntimeSection> {
                   ?.copyWith(color: widget.theme.colorScheme.outline)),
         ),
       ],
+    );
+  }
+}
+
+class _LogSection extends StatefulWidget {
+  final ThemeData theme;
+  final LibraryManager libraryManager;
+
+  const _LogSection({
+    required this.theme,
+    required this.libraryManager,
+  });
+
+  @override
+  State<_LogSection> createState() => _LogSectionState();
+}
+
+class _LogSectionState extends State<_LogSection> {
+  Future<void> _viewLog() async {
+    final log = await widget.libraryManager.getLogs();
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _LogViewer(content: log ?? '(empty)'),
+      ),
+    );
+  }
+
+  Future<void> _clearLog() async {
+    await widget.libraryManager.clearLogs();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Log cleared')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(Icons.bug_report, size: 16,
+            color: widget.theme.colorScheme.outline),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'Captures yt-dlp errors, cookie status, and more',
+            style: widget.theme.textTheme.bodySmall
+                ?.copyWith(color: widget.theme.colorScheme.outline),
+          ),
+        ),
+        TextButton(
+          onPressed: _viewLog,
+          child: const Text('View'),
+        ),
+        TextButton(
+          onPressed: _clearLog,
+          style: TextButton.styleFrom(
+            foregroundColor: widget.theme.colorScheme.error,
+          ),
+          child: const Text('Clear'),
+        ),
+      ],
+    );
+  }
+}
+
+class _LogViewer extends StatelessWidget {
+  final String content;
+  const _LogViewer({required this.content});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Debug Log'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.copy),
+            tooltip: 'Copy to clipboard',
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: content));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Copied to clipboard')),
+              );
+            },
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(12),
+        child: SelectableText(
+          content,
+          style: theme.textTheme.bodySmall?.copyWith(
+            fontFamily: 'monospace',
+            fontSize: 11,
+          ),
+        ),
+      ),
     );
   }
 }

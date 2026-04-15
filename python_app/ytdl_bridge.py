@@ -18,6 +18,9 @@ from urllib.parse import urlparse, parse_qs
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ytdl_bridge")
 
+_LOG_FILE_HANDLER = None
+_LOG_PATH = None
+
 # Progress constants (same scale as tiddl_bridge)
 _PROGRESS_EXTRACT = 0
 _PROGRESS_FORMAT = 5
@@ -38,8 +41,26 @@ except Exception as _e:
 
 
 def set_documents_dir(path):
-    global DOCUMENTS_DIR
+    global DOCUMENTS_DIR, _LOG_FILE_HANDLER, _LOG_PATH
     DOCUMENTS_DIR = path
+    # Set up file logging
+    if path:
+        _LOG_PATH = os.path.join(path, "tidal_debug.log")
+        try:
+            fh = logging.FileHandler(_LOG_PATH, mode="a", encoding="utf-8")
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(logging.Formatter(
+                "%(asctime)s [%(levelname)s] %(message)s",
+                datefmt="%H:%M:%S"))
+            if _LOG_FILE_HANDLER:
+                logger.removeHandler(_LOG_FILE_HANDLER)
+            _LOG_FILE_HANDLER = fh
+            logger.addHandler(fh)
+            logger.setLevel(logging.DEBUG)
+            logger.info("=== ytdl_bridge logging started ==="
+                        f" (yt-dlp {yt_dlp.version.__version__})")
+        except Exception as e:
+            print(f"Could not set up file logging: {e}")
 
 
 def set_cookies_path(path):
@@ -80,6 +101,39 @@ def get_cookies_status():
         })
     except OSError as e:
         return _result(True, {"hasCookies": False, "error": str(e)})
+
+
+def get_log():
+    """Read the debug log file contents."""
+    if not _LOG_PATH or not os.path.isfile(_LOG_PATH):
+        return _result(True, {"content": "(no log file)", "sizeBytes": 0})
+    try:
+        stat = os.stat(_LOG_PATH)
+        # Read last 100KB max to avoid memory issues
+        max_bytes = 100_000
+        with open(_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+            if stat.st_size > max_bytes:
+                f.seek(stat.st_size - max_bytes)
+                f.readline()  # skip partial line
+            content = f.read()
+        return _result(True, {
+            "content": content,
+            "sizeBytes": stat.st_size,
+        })
+    except Exception as e:
+        return _result(False, error=str(e))
+
+
+def clear_log():
+    """Clear the debug log file."""
+    if _LOG_PATH and os.path.isfile(_LOG_PATH):
+        try:
+            with open(_LOG_PATH, "w") as f:
+                f.write("")
+            logger.info("=== log cleared ===")
+        except OSError:
+            pass
+    return _result(True)
 
 
 # ---------------------------------------------------------------------------
@@ -436,14 +490,25 @@ def get_url_info(url):
         import yt_dlp
 
         platform = _detect_platform(url)
+        logger.info(f"get_url_info: url={url} platform={platform}")
+        logger.info(f"  cookies_path={_COOKIES_PATH}"
+                    f" exists={os.path.isfile(_COOKIES_PATH) if _COOKIES_PATH else 'N/A'}")
+        logger.info(f"  yt-dlp {yt_dlp.version.__version__}")
         opts = _ydl_opts_base()
         opts["format"] = "bestaudio/best"
+        has_cookies = "cookiefile" in opts
+        logger.info(f"  opts cookiefile={'yes' if has_cookies else 'NO'}")
 
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
         if not info:
+            logger.warning("get_url_info: extract_info returned None")
             return _result(False, error="Could not extract info from URL")
+
+        info_type = info.get("_type", "track")
+        title = info.get("title", "?")
+        logger.info(f"get_url_info: OK type={info_type} title={title}")
 
         # --- playlist ---
         if info.get("_type") == "playlist":
@@ -534,6 +599,9 @@ def download_url(url, quality="best"):
         from requests import Session as ReqSession
 
         platform = _detect_platform(url)
+        logger.info(f"download_url: url={url} quality={quality} platform={platform}")
+        logger.info(f"  cookies_path={_COOKIES_PATH}"
+                    f" exists={os.path.isfile(_COOKIES_PATH) if _COOKIES_PATH else 'N/A'}")
         _write_progress("extract", _PROGRESS_EXTRACT, "Extracting info...")
 
         # --- 1. Extract info (no download) ---
