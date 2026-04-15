@@ -493,8 +493,8 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 ]
 
                 for cookie in ytCookies {
+                    let includeSubdomains = cookie.domain.hasPrefix(".") ? "TRUE" : "FALSE"
                     let domain = cookie.domain.hasPrefix(".") ? cookie.domain : ".\(cookie.domain)"
-                    let includeSubdomains = domain.hasPrefix(".") ? "TRUE" : "FALSE"
                     let secure = cookie.isSecure ? "TRUE" : "FALSE"
                     let expiry: String
                     if let expiresDate = cookie.expiresDate {
@@ -502,7 +502,11 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                     } else {
                         expiry = "0"
                     }
-                    lines.append("\(domain)\t\(includeSubdomains)\t\(cookie.path)\t\(secure)\t\(expiry)\t\(cookie.name)\t\(cookie.value)")
+                    // Sanitize fields that could contain tabs or newlines
+                    let safeName = cookie.name.replacingOccurrences(of: "\t", with: "").replacingOccurrences(of: "\n", with: "").replacingOccurrences(of: "\r", with: "")
+                    let safeValue = cookie.value.replacingOccurrences(of: "\t", with: "").replacingOccurrences(of: "\n", with: "").replacingOccurrences(of: "\r", with: "")
+                    let safePath = cookie.path.replacingOccurrences(of: "\t", with: "").replacingOccurrences(of: "\n", with: "").replacingOccurrences(of: "\r", with: "")
+                    lines.append("\(domain)\t\(includeSubdomains)\t\(safePath)\t\(secure)\t\(expiry)\t\(safeName)\t\(safeValue)")
                 }
 
                 let content = lines.joined(separator: "\n") + "\n"
