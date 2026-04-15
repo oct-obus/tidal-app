@@ -44,14 +44,17 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
     private func setupRemoteCommands() {
         let center = MPRemoteCommandCenter.shared()
 
+        center.playCommand.isEnabled = true
         center.playCommand.addTarget { [weak self] _ in
             DispatchQueue.main.async { self?.resumePlayback() }
             return .success
         }
+        center.pauseCommand.isEnabled = true
         center.pauseCommand.addTarget { [weak self] _ in
             DispatchQueue.main.async { self?.pausePlayback() }
             return .success
         }
+        center.togglePlayPauseCommand.isEnabled = true
         center.togglePlayPauseCommand.addTarget { [weak self] _ in
             DispatchQueue.main.async {
                 if self?.isPlaying == true {
@@ -62,10 +65,48 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
             }
             return .success
         }
+        center.changePlaybackPositionCommand.isEnabled = true
         center.changePlaybackPositionCommand.addTarget { [weak self] event in
             if let event = event as? MPChangePlaybackPositionCommandEvent {
                 DispatchQueue.main.async {
                     self?.seekTo(seconds: event.positionTime)
+                }
+            }
+            return .success
+        }
+        center.skipForwardCommand.isEnabled = true
+        center.skipForwardCommand.preferredIntervals = [NSNumber(value: 10)]
+        center.skipForwardCommand.addTarget { [weak self] event in
+            DispatchQueue.main.async {
+                guard let self = self, let player = self.player else { return }
+                let interval: Double
+                if let e = event as? MPSkipIntervalCommandEvent {
+                    interval = e.interval
+                } else {
+                    interval = 10
+                }
+                let current = player.currentTime().seconds
+                let duration = player.currentItem?.duration.seconds ?? 0
+                if !current.isNaN && !duration.isNaN {
+                    self.seekTo(seconds: min(current + interval, duration))
+                }
+            }
+            return .success
+        }
+        center.skipBackwardCommand.isEnabled = true
+        center.skipBackwardCommand.preferredIntervals = [NSNumber(value: 10)]
+        center.skipBackwardCommand.addTarget { [weak self] event in
+            DispatchQueue.main.async {
+                guard let self = self, let player = self.player else { return }
+                let interval: Double
+                if let e = event as? MPSkipIntervalCommandEvent {
+                    interval = e.interval
+                } else {
+                    interval = 10
+                }
+                let current = player.currentTime().seconds
+                if !current.isNaN {
+                    self.seekTo(seconds: max(current - interval, 0))
                 }
             }
             return .success
@@ -115,6 +156,17 @@ class AudioBridgePlugin: NSObject, FlutterPlugin {
                 return
             }
             seekTo(seconds: position)
+            result(true)
+
+        case "setSkipIntervals":
+            guard let args = call.arguments as? [String: Any],
+                  let interval = args["interval"] as? Double else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing interval", details: nil))
+                return
+            }
+            let center = MPRemoteCommandCenter.shared()
+            center.skipForwardCommand.preferredIntervals = [NSNumber(value: interval)]
+            center.skipBackwardCommand.preferredIntervals = [NSNumber(value: interval)]
             result(true)
 
         case "getState":

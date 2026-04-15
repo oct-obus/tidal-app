@@ -106,6 +106,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _init() async {
     await _settings.loadSettings();
     _playback.playbackSpeed = _settings.lastSpeed;
+    _playback.setSkipIntervals(_settings.skipDuration);
     await _auth.initPython();
   }
 
@@ -736,6 +737,7 @@ class _HomePageState extends State<HomePage> {
           if (_playback.currentFilePath != null)
             NowPlayingBar(
               playback: _playback,
+              settings: _settings,
               onShowSpeedSheet: () => showSpeedSheet(
                   context, theme, _playback, _settings, _setSpeed),
             ),

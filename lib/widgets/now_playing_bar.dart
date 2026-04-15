@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import '../managers/playback_manager.dart';
+import '../managers/settings_manager.dart';
 import '../utils/formatters.dart';
 
 class NowPlayingBar extends StatelessWidget {
   final PlaybackManager playback;
+  final SettingsManager settings;
   final VoidCallback onShowSpeedSheet;
 
   const NowPlayingBar({
     super.key,
     required this.playback,
+    required this.settings,
     required this.onShowSpeedSheet,
   });
 
@@ -102,14 +105,7 @@ class NowPlayingBar extends StatelessWidget {
                       ],
                     ),
                   ),
-                  IconButton(
-                    icon: Icon(
-                        playback.isPlaying
-                            ? Icons.pause_circle_filled
-                            : Icons.play_circle_filled,
-                        size: 40),
-                    onPressed: playback.togglePlayback,
-                  ),
+                  ..._buildPlaybackControls(),
                   GestureDetector(
                     onTap: onShowSpeedSheet,
                     child: Container(
@@ -132,5 +128,50 @@ class NowPlayingBar extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  IconData _skipIcon(double seconds, {required bool forward}) {
+    final s = seconds.round();
+    if (forward) {
+      if (s <= 5) return Icons.forward_5;
+      if (s <= 15) return Icons.forward_10;
+      return Icons.forward_30;
+    }
+    if (s <= 5) return Icons.replay_5;
+    if (s <= 15) return Icons.replay_10;
+    return Icons.replay_30;
+  }
+
+  List<Widget> _buildPlaybackControls() {
+    final dur = settings.skipDuration;
+    final bwd = IconButton(
+      icon: Icon(_skipIcon(dur, forward: false), size: 28),
+      onPressed: () => playback.skipBackward(dur),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+    );
+    final play = IconButton(
+      icon: Icon(
+          playback.isPlaying
+              ? Icons.pause_circle_filled
+              : Icons.play_circle_filled,
+          size: 40),
+      onPressed: playback.togglePlayback,
+    );
+    final fwd = IconButton(
+      icon: Icon(_skipIcon(dur, forward: true), size: 28),
+      onPressed: () => playback.skipForward(dur),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+    );
+
+    switch (settings.skipLayout) {
+      case SkipLayout.left:
+        return [bwd, fwd, play];
+      case SkipLayout.right:
+        return [play, bwd, fwd];
+      case SkipLayout.split:
+        return [bwd, play, fwd];
+    }
   }
 }

@@ -228,6 +228,71 @@ void showSettingsSheet(
               ],
             ),
             const SizedBox(height: 16),
+            Text('Skip Duration', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: SettingsManager.skipDurationOptions.map((dur) {
+                return ChoiceChip(
+                  label: Text('${dur.round()}s'),
+                  selected:
+                      (settings.skipDuration - dur).abs() < 0.1,
+                  onSelected: (_) {
+                    settings.skipDuration = dur;
+                    playback.setSkipIntervals(dur);
+                    onChanged();
+                    settings.saveSettings(
+                        currentSpeed: playback.playbackSpeed);
+                    setSheetState(() {});
+                  },
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 16),
+            Text('Skip Button Layout',
+                style: theme.textTheme.titleSmall),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ChoiceChip(
+                  label: const Text('⏪ ▶ ⏩'),
+                  selected: settings.skipLayout == SkipLayout.split,
+                  onSelected: (_) {
+                    settings.skipLayout = SkipLayout.split;
+                    onChanged();
+                    settings.saveSettings(
+                        currentSpeed: playback.playbackSpeed);
+                    setSheetState(() {});
+                  },
+                ),
+                ChoiceChip(
+                  label: const Text('⏪⏩ ▶'),
+                  selected: settings.skipLayout == SkipLayout.left,
+                  onSelected: (_) {
+                    settings.skipLayout = SkipLayout.left;
+                    onChanged();
+                    settings.saveSettings(
+                        currentSpeed: playback.playbackSpeed);
+                    setSheetState(() {});
+                  },
+                ),
+                ChoiceChip(
+                  label: const Text('▶ ⏪⏩'),
+                  selected: settings.skipLayout == SkipLayout.right,
+                  onSelected: (_) {
+                    settings.skipLayout = SkipLayout.right;
+                    onChanged();
+                    settings.saveSettings(
+                        currentSpeed: playback.playbackSpeed);
+                    setSheetState(() {});
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
             Text(
               'Tidal quality affects new Tidal downloads only. '
               'Hi-Res requires Tidal HiFi Plus. '

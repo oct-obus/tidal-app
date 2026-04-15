@@ -5,6 +5,7 @@ import '../services/channels.dart';
 enum SortField { downloadDate, title, artist, fileSize, duration }
 enum GroupBy { none, downloadDate, artist }
 enum DisplayAttribute { artist, duration, fileSize, audioQuality, downloadDate, album }
+enum SkipLayout { split, left, right }
 
 class SettingsManager extends ChangeNotifier {
   String audioQuality = 'LOSSLESS';
@@ -15,6 +16,8 @@ class SettingsManager extends ChangeNotifier {
   SortField sortField = SortField.downloadDate;
   bool sortAscending = false;
   GroupBy groupBy = GroupBy.none;
+  double skipDuration = 10.0;
+  SkipLayout skipLayout = SkipLayout.split;
   Set<DisplayAttribute> displayAttributes = {
     DisplayAttribute.artist,
     DisplayAttribute.duration,
@@ -31,6 +34,7 @@ class SettingsManager extends ChangeNotifier {
 
   static const qualityOptions = ['LOW', 'HIGH', 'LOSSLESS', 'HI_RES_LOSSLESS'];
   static const stepOptions = [0.025, 0.05, 0.10, 0.15];
+  static const skipDurationOptions = [5.0, 10.0, 15.0, 30.0];
 
   Future<void> loadSettings() async {
     try {
@@ -45,6 +49,8 @@ class SettingsManager extends ChangeNotifier {
         sortField = SortField.values.asNameMap()[data['sortField'] as String? ?? ''] ?? SortField.downloadDate;
         sortAscending = data['sortAscending'] as bool? ?? false;
         groupBy = GroupBy.values.asNameMap()[data['groupBy'] as String? ?? ''] ?? GroupBy.none;
+        skipDuration = (data['skipDuration'] as num?)?.toDouble() ?? 10.0;
+        skipLayout = SkipLayout.values.asNameMap()[data['skipLayout'] as String? ?? ''] ?? SkipLayout.split;
         final savedAttrs = data['displayAttributes'] as List<dynamic>?;
         if (savedAttrs != null) {
           displayAttributes = savedAttrs
@@ -70,6 +76,8 @@ class SettingsManager extends ChangeNotifier {
         'sortField': sortField.name,
         'sortAscending': sortAscending,
         'groupBy': groupBy.name,
+        'skipDuration': skipDuration,
+        'skipLayout': skipLayout.name,
         'displayAttributes': displayAttributes.map((a) => a.name).toList(),
       });
       await pythonChannel.invokeMethod('saveSettings', {'json': json});

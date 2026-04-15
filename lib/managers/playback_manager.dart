@@ -127,6 +127,26 @@ class PlaybackManager extends ChangeNotifier {
     }
   }
 
+  Future<void> skipForward(double seconds) async {
+    final newPos = (positionNotifier.value + seconds)
+        .clamp(0.0, durationNotifier.value);
+    await seekTo(newPos);
+  }
+
+  Future<void> skipBackward(double seconds) async {
+    final newPos = (positionNotifier.value - seconds)
+        .clamp(0.0, durationNotifier.value);
+    await seekTo(newPos);
+  }
+
+  Future<void> setSkipIntervals(double seconds) async {
+    try {
+      await audioChannel.invokeMethod('setSkipIntervals', {'interval': seconds});
+    } catch (e) {
+      debugPrint('Error in setSkipIntervals: $e');
+    }
+  }
+
   Future<void> stop() async {
     try {
       await audioChannel.invokeMethod('stop');
