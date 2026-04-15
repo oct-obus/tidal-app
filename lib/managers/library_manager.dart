@@ -377,6 +377,24 @@ class LibraryManager extends ChangeNotifier {
     }
   }
 
+  /// Extract YouTube/Google cookies from WKWebView's data store and save
+  /// as Netscape cookies.txt for yt-dlp. Returns {count, path} on success.
+  Future<Map<String, dynamic>?> extractYouTubeCookies() async {
+    try {
+      final response =
+          await pythonChannel.invokeMethod<String>('extractYouTubeCookies');
+      if (response == null) return null;
+      final data = jsonDecode(response);
+      if (data['success'] == true) {
+        return data['data'] as Map<String, dynamic>;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error in extractYouTubeCookies: $e');
+      return null;
+    }
+  }
+
   @override
   void dispose() {
     _isDisposed = true;

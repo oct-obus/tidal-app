@@ -1,5 +1,6 @@
 import Flutter
 import UIKit
+import WebKit
 
 // Python C API
 @_silgen_name("Py_Initialize")
@@ -461,6 +462,65 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "COPY_ERROR",
                                     message: "Failed to import cookies: \(error.localizedDescription)",
                                     details: nil))
+            }
+
+        case "extractYouTubeCookies":
+            // Extract YouTube/Google cookies from WKWebView's default data store
+            // and save as Netscape cookies.txt for yt-dlp
+            let store = WKWebsiteDataStore.default().httpCookieStore
+            store.getAllCookies { [weak self] cookies in
+                guard let self = self else {
+                    result(FlutterError(code: "ERROR", message: "Plugin deallocated", details: nil))
+                    return
+                }
+
+                let ytCookies = cookies.filter { cookie in
+                    cookie.domain.contains("youtube") ||
+                    cookie.domain.contains("google") ||
+                    cookie.domain.contains("googlevideo")
+                }
+
+                if ytCookies.isEmpty {
+                    result("{\"success\":true,\"data\":{\"count\":0}}")
+                    return
+                }
+
+                // Build Netscape cookies.txt
+                var lines = [
+                    "# Netscape HTTP Cookie File",
+                    "# Extracted from WKWebView by Tidal App",
+                    ""
+                ]
+
+                for cookie in ytCookies {
+                    let domain = cookie.domain.hasPrefix(".") ? cookie.domain : ".\(cookie.domain)"
+                    let includeSubdomains = domain.hasPrefix(".") ? "TRUE" : "FALSE"
+                    let secure = cookie.isSecure ? "TRUE" : "FALSE"
+                    let expiry: String
+                    if let expiresDate = cookie.expiresDate {
+                        expiry = String(Int(expiresDate.timeIntervalSince1970))
+                    } else {
+                        expiry = "0"
+                    }
+                    lines.append("\(domain)\t\(includeSubdomains)\t\(cookie.path)\t\(secure)\t\(expiry)\t\(cookie.name)\t\(cookie.value)")
+                }
+
+                let content = lines.joined(separator: "\n") + "\n"
+                let docs = self.bridge.documentsPath
+                let destPath = "\(docs)/cookies.txt"
+
+                do {
+                    try content.write(toFile: destPath, atomically: true, encoding: .utf8)
+                    let safeDest = self.bridge.pythonEscape(destPath)
+                    self.bridge.runWithResult("ytdl_bridge.set_cookies_path('\(safeDest)') or 'ok'") { _ in
+                        let response = "{\"success\":true,\"data\":{\"count\":\(ytCookies.count),\"path\":\"\(destPath)\"}}"
+                        result(response)
+                    }
+                } catch {
+                    result(FlutterError(code: "WRITE_ERROR",
+                                        message: "Failed to write cookies: \(error.localizedDescription)",
+                                        details: nil))
+                }
             }
 
         default:

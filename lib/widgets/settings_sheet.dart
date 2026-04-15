@@ -4,6 +4,7 @@ import '../managers/settings_manager.dart';
 import '../managers/auth_manager.dart';
 import '../managers/playback_manager.dart';
 import '../managers/library_manager.dart';
+import 'youtube_login.dart';
 
 void showSettingsSheet(
   BuildContext context,
@@ -95,7 +96,7 @@ void showSettingsSheet(
             ),
             if (libraryManager != null) ...[
               const SizedBox(height: 16),
-              Text('YouTube Premium Cookies',
+              Text('YouTube Cookies',
                   style: theme.textTheme.titleSmall),
               const SizedBox(height: 8),
               _CookieSection(
@@ -313,6 +314,19 @@ class _CookieSectionState extends State<_CookieSection> {
     }
   }
 
+  Future<void> _loginYouTube() async {
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => YouTubeLoginScreen(
+          libraryManager: widget.libraryManager,
+        ),
+      ),
+    );
+    if (result == true && mounted) {
+      await _loadStatus();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -349,8 +363,8 @@ class _CookieSectionState extends State<_CookieSection> {
                     ?.copyWith(color: widget.theme.colorScheme.outline)),
           ),
           TextButton(
-            onPressed: _importCookies,
-            child: const Text('Replace'),
+            onPressed: _loginYouTube,
+            child: const Text('Refresh'),
           ),
           TextButton(
             onPressed: _clearCookies,
@@ -367,16 +381,28 @@ class _CookieSectionState extends State<_CookieSection> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Import a cookies.txt file from Firefox to unlock '
-          '256kbps AAC on YouTube.',
+          'Log in to YouTube to bypass bot detection and '
+          'unlock 256kbps AAC with Premium.',
           style: widget.theme.textTheme.bodySmall
               ?.copyWith(color: widget.theme.colorScheme.outline),
         ),
         const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: _importCookies,
-          icon: const Icon(Icons.file_upload, size: 18),
-          label: const Text('Import cookies.txt'),
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: _loginYouTube,
+                icon: const Icon(Icons.login, size: 18),
+                label: const Text('Log in to YouTube'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              onPressed: _importCookies,
+              icon: const Icon(Icons.file_upload, size: 18),
+              label: const Text('Import file'),
+            ),
+          ],
         ),
       ],
     );
