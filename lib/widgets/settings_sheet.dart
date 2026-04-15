@@ -581,11 +581,15 @@ class _LogSection extends StatefulWidget {
 
 class _LogSectionState extends State<_LogSection> {
   Future<void> _viewLog() async {
-    final log = await widget.libraryManager.getLogs();
+    final data = await widget.libraryManager.getLogData();
     if (!mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => _LogViewer(content: log ?? '(empty)'),
+        builder: (_) => _LogViewer(
+          content: data?['content'] as String? ?? '(empty)',
+          filePath: data?['path'] as String?,
+          libraryManager: widget.libraryManager,
+        ),
       ),
     );
   }
@@ -631,7 +635,13 @@ class _LogSectionState extends State<_LogSection> {
 
 class _LogViewer extends StatelessWidget {
   final String content;
-  const _LogViewer({required this.content});
+  final String? filePath;
+  final LibraryManager libraryManager;
+  const _LogViewer({
+    required this.content,
+    this.filePath,
+    required this.libraryManager,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -640,6 +650,12 @@ class _LogViewer extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Debug Log'),
         actions: [
+          if (filePath != null)
+            IconButton(
+              icon: const Icon(Icons.share),
+              tooltip: 'Share log file',
+              onPressed: () => libraryManager.shareFile(filePath!),
+            ),
           IconButton(
             icon: const Icon(Icons.copy),
             tooltip: 'Copy to clipboard',

@@ -404,6 +404,35 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 result(response)
             }
 
+        case "shareFile":
+            guard let args = call.arguments as? [String: Any],
+                  let filePath = args["path"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'path'", details: nil))
+                return
+            }
+            let url = URL(fileURLWithPath: filePath)
+            guard FileManager.default.fileExists(atPath: filePath) else {
+                result(FlutterError(code: "NOT_FOUND", message: "File not found", details: nil))
+                return
+            }
+            DispatchQueue.main.async {
+                guard let rootVC = UIApplication.shared.keyWindow?.rootViewController else {
+                    result(FlutterError(code: "NO_VC", message: "No root view controller", details: nil))
+                    return
+                }
+                let activityVC = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+                // iPad requires popover
+                if let popover = activityVC.popoverPresentationController {
+                    popover.sourceView = rootVC.view
+                    popover.sourceRect = CGRect(x: rootVC.view.bounds.midX,
+                                                y: rootVC.view.bounds.midY, width: 0, height: 0)
+                    popover.permittedArrowDirections = []
+                }
+                rootVC.present(activityVC, animated: true) {
+                    result(true)
+                }
+            }
+
         case "getUrlInfo":
             guard let args = call.arguments as? [String: Any],
                   let url = args["url"] as? String else {

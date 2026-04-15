@@ -119,6 +119,7 @@ def get_log():
         return _result(True, {
             "content": content,
             "sizeBytes": stat.st_size,
+            "path": _LOG_PATH,
         })
     except Exception as e:
         return _result(False, error=str(e))

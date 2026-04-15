@@ -404,21 +404,27 @@ class LibraryManager extends ChangeNotifier {
     }
   }
 
-  /// Get debug logs from the Python backend.
-  Future<String?> getLogs() async {
+  /// Get debug logs from the Python backend. Returns {content, path, sizeBytes}.
+  Future<Map<String, dynamic>?> getLogData() async {
     try {
       final response =
           await pythonChannel.invokeMethod<String>('getLogs');
       if (response == null) return null;
       final data = jsonDecode(response);
       if (data['success'] == true) {
-        return data['data']?['content'] as String?;
+        return data['data'] as Map<String, dynamic>;
       }
       return null;
     } catch (e) {
-      debugPrint('Error in getLogs: $e');
+      debugPrint('Error in getLogData: $e');
       return null;
     }
+  }
+
+  /// Get debug logs content only (convenience).
+  Future<String?> getLogs() async {
+    final data = await getLogData();
+    return data?['content'] as String?;
   }
 
   /// Clear debug logs.
@@ -427,6 +433,15 @@ class LibraryManager extends ChangeNotifier {
       await pythonChannel.invokeMethod<String>('clearLogs');
     } catch (e) {
       debugPrint('Error in clearLogs: $e');
+    }
+  }
+
+  /// Share a file using the iOS share sheet.
+  Future<void> shareFile(String path) async {
+    try {
+      await pythonChannel.invokeMethod('shareFile', {'path': path});
+    } catch (e) {
+      debugPrint('Error in shareFile: $e');
     }
   }
 
