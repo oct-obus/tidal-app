@@ -205,6 +205,16 @@ def _ydl_opts_base(*, use_cookies=True):
     Args:
         use_cookies: If True and cookies exist, load them. Set to False
                      to bypass cookie-based client filtering (SABR workaround).
+
+    Client selection strategy:
+        We do NOT override player_client — yt-dlp's defaults are smart:
+        - Authenticated (cookies): ('tv_downgraded', 'web_safari')
+          → tv_downgraded has SUPPORTS_COOKIES=True, survives the filter,
+            and being a TVHTML5 client avoids SABR.
+        - Not authenticated: ('android_vr', 'web_safari')
+          → android_vr bypasses SABR (clientVersion < threshold).
+        Overriding with ["android_vr", "ios", "mweb"] was the bug — all
+        three get removed by the SUPPORTS_COOKIES filter when authed.
     """
     opts = {
         "quiet": True,
@@ -219,7 +229,8 @@ def _ydl_opts_base(*, use_cookies=True):
         "ignore_no_formats_error": True,
         "extractor_args": {
             "youtube": {
-                "player_client": ["android_vr", "ios", "mweb"],
+                # Don't set player_client — let yt-dlp pick smart defaults
+                # (tv_downgraded for authed, android_vr for non-authed)
                 "formats": ["missing_pot"],
             }
         },
@@ -236,14 +247,14 @@ def _ydl_opts_base(*, use_cookies=True):
 def _extract_with_fallback(url):
     """Extract info with two-pass strategy for YouTube cookie/SABR issues.
 
-    Pass 1: With cookies (for Premium quality). When cookies are loaded,
-    yt-dlp sets is_authenticated=True and REMOVES any client that lacks
-    SUPPORTS_COOKIES (android_vr, ios). If the surviving clients
-    (mweb etc.) return SABR-only streams, no formats have URLs.
+    Pass 1: With cookies (for Premium quality). yt-dlp defaults to
+    ('tv_downgraded', 'web_safari') for authenticated users. tv_downgraded
+    has SUPPORTS_COOKIES=True so it survives, and as a TVHTML5 client it
+    should avoid SABR and return formats with direct URLs.
 
-    Pass 2: Without cookies. android_vr and ios are kept, they bypass
-    SABR and return formats with direct URLs. Loses Premium quality
-    but actually works.
+    Pass 2: Without cookies. yt-dlp defaults to ('android_vr', 'web_safari').
+    android_vr bypasses SABR (old client version). Loses Premium quality
+    but reliably works.
 
     Returns (info_dict, used_cookies: bool) or raises on total failure.
     """
@@ -251,10 +262,10 @@ def _extract_with_fallback(url):
 
     has_cookies = _COOKIES_PATH and os.path.isfile(_COOKIES_PATH)
 
-    # --- Pass 1: with cookies ---
+    # --- Pass 1: with cookies (defaults to tv_downgraded + web_safari) ---
     opts = _ydl_opts_base(use_cookies=True)
     logger.info(f"  extract pass 1: cookies={'yes' if has_cookies else 'no'}"
-                f" clients={opts['extractor_args']['youtube']['player_client']}")
+                " (using yt-dlp default clients)")
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -270,11 +281,11 @@ def _extract_with_fallback(url):
         if audio_fmts:
             return info, True
 
-    # --- Pass 2: without cookies (unlocks android_vr/ios) ---
+    # --- Pass 2: without cookies (defaults to android_vr + web_safari) ---
     if has_cookies:
         logger.warning("  No audio formats with cookies — retrying without"
-                       " (SABR workaround: is_authenticated=False keeps"
-                       " android_vr/ios)")
+                       " (SABR workaround: is_authenticated=False → defaults"
+                       " to android_vr + web_safari)")
         opts2 = _ydl_opts_base(use_cookies=False)
         try:
             with yt_dlp.YoutubeDL(opts2) as ydl:
