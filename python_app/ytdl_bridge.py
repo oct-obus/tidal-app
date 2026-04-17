@@ -21,6 +21,8 @@ logger = logging.getLogger("ytdl_bridge")
 _LOG_FILE_HANDLER = None
 _LOG_PATH = None
 
+_APP_VERSION = "1.5.1"
+
 # Progress constants (same scale as tiddl_bridge)
 _PROGRESS_EXTRACT = 0
 _PROGRESS_FORMAT = 5
@@ -58,7 +60,8 @@ def set_documents_dir(path):
             logger.addHandler(fh)
             logger.setLevel(logging.DEBUG)
             logger.info("=== ytdl_bridge logging started ==="
-                        f" (yt-dlp {yt_dlp.version.__version__})")
+                        f" app={_APP_VERSION}"
+                        f" yt-dlp={yt_dlp.version.__version__}")
         except Exception as e:
             print(f"Could not set up file logging: {e}")
 
@@ -198,6 +201,7 @@ def _platform_prefix(platform):
 
 def _ydl_opts_base():
     """Common yt-dlp options for iOS."""
+    has_cookies = _COOKIES_PATH and os.path.isfile(_COOKIES_PATH)
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -207,19 +211,23 @@ def _ydl_opts_base():
         "nocheckcertificate": False,
         # Disable all post-processors (no ffmpeg on iOS)
         "postprocessors": [],
-        # Explicit player client preference for YouTube anti-throttle.
-        # ios returns HLS streams that bypass n-param throttling;
-        # mweb is the fallback if ios fails.
-        "extractor_args": {"youtube": {"player_client": ["ios", "mweb"]}},
+        # Permissive format: best audio, fallback to any single stream
+        "format": "ba/b/w",
     }
+    if has_cookies:
+        # With cookies (logged-in user), use default web client.
+        # The ios player client rejects web cookies and returns no formats.
+        opts["cookiefile"] = _COOKIES_PATH
+    else:
+        # Without cookies, use ios+mweb clients to bypass n-param throttle.
+        opts["extractor_args"] = {
+            "youtube": {"player_client": ["ios", "mweb"]}
+        }
     # Use Documents/cache for yt-dlp cache
     if DOCUMENTS_DIR:
         cache_dir = os.path.join(DOCUMENTS_DIR, "cache", "ytdl")
         os.makedirs(cache_dir, exist_ok=True)
         opts["cachedir"] = cache_dir
-    # Inject cookies for YouTube Premium (unlocks 256kbps AAC)
-    if _COOKIES_PATH and os.path.isfile(_COOKIES_PATH):
-        opts["cookiefile"] = _COOKIES_PATH
     return opts
 
 
@@ -494,12 +502,13 @@ def get_url_info(url):
         logger.info(f"get_url_info: url={url} platform={platform}")
         logger.info(f"  cookies_path={_COOKIES_PATH}"
                     f" exists={os.path.isfile(_COOKIES_PATH) if _COOKIES_PATH else 'N/A'}")
-        logger.info(f"  yt-dlp {yt_dlp.version.__version__}")
+        logger.info(f"  yt-dlp {yt_dlp.version.__version__} app={_APP_VERSION}")
         opts = _ydl_opts_base()
-        # Don't filter formats during extract — we do our own selection later
-        # and yt-dlp's "bestaudio/best" can fail with ios player client
         has_cookies = "cookiefile" in opts
-        logger.info(f"  opts cookiefile={'yes' if has_cookies else 'NO'}")
+        has_ios_client = "ios" in str(opts.get("extractor_args", ""))
+        logger.info(f"  cookiefile={'yes' if has_cookies else 'no'}"
+                    f" format={opts.get('format')}"
+                    f" player={'ios+mweb' if has_ios_client else 'default'}")
 
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -604,11 +613,11 @@ def download_url(url, quality="best"):
         logger.info(f"download_url: url={url} quality={quality} platform={platform}")
         logger.info(f"  cookies_path={_COOKIES_PATH}"
                     f" exists={os.path.isfile(_COOKIES_PATH) if _COOKIES_PATH else 'N/A'}")
+        logger.info(f"  app={_APP_VERSION}")
         _write_progress("extract", _PROGRESS_EXTRACT, "Extracting info...")
 
         # --- 1. Extract info (no download) ---
         opts = _ydl_opts_base()
-        # Don't filter formats — _select_audio_format() handles it below
 
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
