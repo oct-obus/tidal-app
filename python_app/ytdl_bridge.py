@@ -496,7 +496,8 @@ def get_url_info(url):
                     f" exists={os.path.isfile(_COOKIES_PATH) if _COOKIES_PATH else 'N/A'}")
         logger.info(f"  yt-dlp {yt_dlp.version.__version__}")
         opts = _ydl_opts_base()
-        opts["format"] = "bestaudio/best"
+        # Don't filter formats during extract — we do our own selection later
+        # and yt-dlp's "bestaudio/best" can fail with ios player client
         has_cookies = "cookiefile" in opts
         logger.info(f"  opts cookiefile={'yes' if has_cookies else 'NO'}")
 
@@ -607,7 +608,7 @@ def download_url(url, quality="best"):
 
         # --- 1. Extract info (no download) ---
         opts = _ydl_opts_base()
-        opts["format"] = "bestaudio/best"
+        # Don't filter formats — _select_audio_format() handles it below
 
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
