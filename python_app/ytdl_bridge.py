@@ -21,7 +21,7 @@ logger = logging.getLogger("ytdl_bridge")
 _LOG_FILE_HANDLER = None
 _LOG_PATH = None
 
-_APP_VERSION = "1.5.2"
+_APP_VERSION = "1.5.3"
 
 # Progress constants (same scale as tiddl_bridge)
 _PROGRESS_EXTRACT = 0
@@ -199,9 +199,13 @@ def _platform_prefix(platform):
     return {"youtube": "yt", "soundcloud": "sc"}.get(platform, "dl")
 
 
-def _ydl_opts_base():
-    """Common yt-dlp options for iOS."""
-    has_cookies = _COOKIES_PATH and os.path.isfile(_COOKIES_PATH)
+def _ydl_opts_base(*, use_cookies=True):
+    """Common yt-dlp options for iOS.
+
+    Args:
+        use_cookies: If True and cookies exist, load them. Set to False
+                     to bypass cookie-based client filtering (SABR workaround).
+    """
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -209,15 +213,10 @@ def _ydl_opts_base():
         "noprogress": True,
         "socket_timeout": 30,
         "nocheckcertificate": False,
-        # Disable all post-processors (no ffmpeg on iOS)
         "postprocessors": [],
-        # Permissive format: best audio, fallback to any single stream
         "format": "ba/b/w",
-        # Force non-SABR clients. YouTube's web clients now return SABR-only
-        # streams (no direct URLs), causing zero available formats.
-        # android_vr (v1.65) avoids SABR; ios provides HLS fallback.
-        # missing_pot: don't skip formats that lack a PO token — the
-        # webkit-jsi plugin may provide one, and Premium users don't need it.
+        # Don't crash on empty format selection — we handle it ourselves
+        "ignore_no_formats_error": True,
         "extractor_args": {
             "youtube": {
                 "player_client": ["android_vr", "ios", "mweb"],
@@ -225,14 +224,87 @@ def _ydl_opts_base():
             }
         },
     }
-    if has_cookies:
+    if use_cookies and _COOKIES_PATH and os.path.isfile(_COOKIES_PATH):
         opts["cookiefile"] = _COOKIES_PATH
-    # Use Documents/cache for yt-dlp cache
     if DOCUMENTS_DIR:
         cache_dir = os.path.join(DOCUMENTS_DIR, "cache", "ytdl")
         os.makedirs(cache_dir, exist_ok=True)
         opts["cachedir"] = cache_dir
     return opts
+
+
+def _extract_with_fallback(url):
+    """Extract info with two-pass strategy for YouTube cookie/SABR issues.
+
+    Pass 1: With cookies (for Premium quality). When cookies are loaded,
+    yt-dlp sets is_authenticated=True and REMOVES any client that lacks
+    SUPPORTS_COOKIES (android_vr, ios). If the surviving clients
+    (mweb etc.) return SABR-only streams, no formats have URLs.
+
+    Pass 2: Without cookies. android_vr and ios are kept, they bypass
+    SABR and return formats with direct URLs. Loses Premium quality
+    but actually works.
+
+    Returns (info_dict, used_cookies: bool) or raises on total failure.
+    """
+    import yt_dlp
+
+    has_cookies = _COOKIES_PATH and os.path.isfile(_COOKIES_PATH)
+
+    # --- Pass 1: with cookies ---
+    opts = _ydl_opts_base(use_cookies=True)
+    logger.info(f"  extract pass 1: cookies={'yes' if has_cookies else 'no'}"
+                f" clients={opts['extractor_args']['youtube']['player_client']}")
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        logger.warning(f"  pass 1 failed: {e}")
+        info = None
+
+    if info:
+        formats = info.get("formats") or []
+        audio_fmts = [f for f in formats
+                      if f.get("url") and f.get("acodec", "none") != "none"]
+        _log_formats(formats, "pass1")
+        if audio_fmts:
+            return info, True
+
+    # --- Pass 2: without cookies (unlocks android_vr/ios) ---
+    if has_cookies:
+        logger.warning("  No audio formats with cookies — retrying without"
+                       " (SABR workaround: is_authenticated=False keeps"
+                       " android_vr/ios)")
+        opts2 = _ydl_opts_base(use_cookies=False)
+        try:
+            with yt_dlp.YoutubeDL(opts2) as ydl:
+                info2 = ydl.extract_info(url, download=False)
+        except Exception as e:
+            logger.warning(f"  pass 2 failed: {e}")
+            info2 = None
+
+        if info2:
+            formats2 = info2.get("formats") or []
+            _log_formats(formats2, "pass2")
+            audio_fmts2 = [f for f in formats2
+                           if f.get("url") and f.get("acodec", "none") != "none"]
+            if audio_fmts2:
+                return info2, False
+
+    # Return whatever we got (may have zero formats — caller handles error)
+    return info or info2, has_cookies
+
+
+def _log_formats(formats, label=""):
+    """Log format summary for diagnostics."""
+    logger.info(f"  [{label}] formats_count={len(formats)}")
+    for f in formats[:12]:
+        logger.info(f"    fmt={f.get('format_id')} ext={f.get('ext')}"
+                    f" acodec={f.get('acodec')} vcodec={f.get('vcodec')}"
+                    f" abr={f.get('abr')} url={'yes' if f.get('url') else 'NO'}"
+                    f" note={f.get('format_note', '')[:40]}")
+    if len(formats) > 12:
+        logger.info(f"    ... and {len(formats) - 12} more")
 
 
 # ---------------------------------------------------------------------------
@@ -507,29 +579,12 @@ def get_url_info(url):
         logger.info(f"  cookies_path={_COOKIES_PATH}"
                     f" exists={os.path.isfile(_COOKIES_PATH) if _COOKIES_PATH else 'N/A'}")
         logger.info(f"  yt-dlp {yt_dlp.version.__version__} app={_APP_VERSION}")
-        opts = _ydl_opts_base()
-        has_cookies = "cookiefile" in opts
-        clients = opts.get("extractor_args", {}).get("youtube", {}).get("player_client", [])
-        logger.info(f"  cookiefile={'yes' if has_cookies else 'no'}"
-                    f" format={opts.get('format')}"
-                    f" clients={clients}")
 
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        info, used_cookies = _extract_with_fallback(url)
 
         if not info:
             logger.warning("get_url_info: extract_info returned None")
             return _result(False, error="Could not extract info from URL")
-
-        # Log available formats for debugging
-        raw_formats = info.get("formats", [])
-        logger.info(f"  formats_count={len(raw_formats)}")
-        for f in raw_formats[:10]:
-            logger.info(f"    fmt={f.get('format_id')} ext={f.get('ext')}"
-                        f" acodec={f.get('acodec')} vcodec={f.get('vcodec')}"
-                        f" abr={f.get('abr')} url={'yes' if f.get('url') else 'NO'}")
-        if len(raw_formats) > 10:
-            logger.info(f"    ... and {len(raw_formats) - 10} more")
 
         info_type = info.get("_type", "track")
         title = info.get("title", "?")
@@ -630,11 +685,8 @@ def download_url(url, quality="best"):
         logger.info(f"  app={_APP_VERSION}")
         _write_progress("extract", _PROGRESS_EXTRACT, "Extracting info...")
 
-        # --- 1. Extract info (no download) ---
-        opts = _ydl_opts_base()
-
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        # --- 1. Extract info (no download) with SABR fallback ---
+        info, used_cookies = _extract_with_fallback(url)
 
         if not info:
             return _result(False, error="Could not extract info from URL")
