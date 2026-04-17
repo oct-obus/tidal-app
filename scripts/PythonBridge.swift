@@ -34,13 +34,41 @@ func PyEval_SaveThread() -> OpaquePointer?
 /// Extensions that AVPlayer cannot play natively.
 private let _nonNativeAudioExts: Set<String> = ["webm", "opus", "ogg"]
 
+/// Log to both NSLog and the shared tidal_debug.log file.
+private func transcodeLog(_ message: String) {
+    NSLog("Transcode: \(message)")
+    // Append to the same debug log that Python uses
+    if let docs = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first {
+        let logPath = "\(docs)/tidal_debug.log"
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let timestamp = formatter.string(from: Date())
+        let line = "\(timestamp) [Transcode] \(message)\n"
+        if let data = line.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: logPath) {
+                if let handle = FileHandle(forWritingAtPath: logPath) {
+                    handle.seekToEndOfFile()
+                    handle.write(data)
+                    handle.closeFile()
+                }
+            } else {
+                FileManager.default.createFile(atPath: logPath, contents: data)
+            }
+        }
+    }
+}
+
 /// Transcode a non-native audio file (e.g. opus in webm) to ALAC in an m4a
 /// container using AudioToolbox's ExtAudioFile API (iOS 17+).
 /// Returns the path of the transcoded file on success, or nil on failure.
 func transcodeToALAC(inputPath: String) -> String? {
+    let startTime = CFAbsoluteTimeGetCurrent()
     let inputURL = URL(fileURLWithPath: inputPath)
     let outputPath = (inputPath as NSString).deletingPathExtension + ".m4a"
     let outputURL = URL(fileURLWithPath: outputPath)
+
+    let inputSize = (try? FileManager.default.attributesOfItem(atPath: inputPath)[.size] as? Int) ?? 0
+    transcodeLog("Starting: \(inputPath) (\(inputSize / 1024) KB)")
 
     // Remove existing output if present
     try? FileManager.default.removeItem(at: outputURL)
@@ -49,7 +77,7 @@ func transcodeToALAC(inputPath: String) -> String? {
     var inputFileRef: ExtAudioFileRef?
     var status = ExtAudioFileOpenURL(inputURL as CFURL, &inputFileRef)
     guard status == noErr, let inputFile = inputFileRef else {
-        NSLog("TranscodeALAC: Failed to open input (\(status)): \(inputPath)")
+        transcodeLog("Failed to open input (\(status)): \(inputPath)")
         return nil
     }
     defer { ExtAudioFileDispose(inputFile) }
@@ -60,7 +88,7 @@ func transcodeToALAC(inputPath: String) -> String? {
     status = ExtAudioFileGetProperty(
         inputFile, kExtAudioFileProperty_FileDataFormat, &propSize, &inputASBD)
     guard status == noErr else {
-        NSLog("TranscodeALAC: Failed to get input format (\(status))")
+        transcodeLog("Failed to get input format (\(status))")
         return nil
     }
 
@@ -84,7 +112,7 @@ func transcodeToALAC(inputPath: String) -> String? {
         inputFile, kExtAudioFileProperty_ClientDataFormat,
         UInt32(MemoryLayout<AudioStreamBasicDescription>.size), &clientASBD)
     guard status == noErr else {
-        NSLog("TranscodeALAC: Failed to set client format on input (\(status))")
+        transcodeLog("Failed to set client format on input (\(status))")
         return nil
     }
 
@@ -110,7 +138,7 @@ func transcodeToALAC(inputPath: String) -> String? {
         AudioFileFlags.eraseFile.rawValue,
         &outputFileRef)
     guard status == noErr, let outputFile = outputFileRef else {
-        NSLog("TranscodeALAC: Failed to create output (\(status)): \(outputPath)")
+        transcodeLog("Failed to create output (\(status)): \(outputPath)")
         return nil
     }
     defer { ExtAudioFileDispose(outputFile) }
@@ -119,7 +147,7 @@ func transcodeToALAC(inputPath: String) -> String? {
         outputFile, kExtAudioFileProperty_ClientDataFormat,
         UInt32(MemoryLayout<AudioStreamBasicDescription>.size), &clientASBD)
     guard status == noErr else {
-        NSLog("TranscodeALAC: Failed to set client format on output (\(status))")
+        transcodeLog("Failed to set client format on output (\(status))")
         return nil
     }
 
@@ -143,7 +171,7 @@ func transcodeToALAC(inputPath: String) -> String? {
 
         status = ExtAudioFileRead(inputFile, &frameCount, &bufferList)
         guard status == noErr else {
-            NSLog("TranscodeALAC: Read error at frame \(totalFrames) (\(status))")
+            transcodeLog("Read error at frame \(totalFrames) (\(status))")
             try? FileManager.default.removeItem(at: outputURL)
             return nil
         }
@@ -151,7 +179,7 @@ func transcodeToALAC(inputPath: String) -> String? {
 
         status = ExtAudioFileWrite(outputFile, frameCount, &bufferList)
         guard status == noErr else {
-            NSLog("TranscodeALAC: Write error at frame \(totalFrames) (\(status))")
+            transcodeLog("Write error at frame \(totalFrames) (\(status))")
             try? FileManager.default.removeItem(at: outputURL)
             return nil
         }
@@ -159,7 +187,9 @@ func transcodeToALAC(inputPath: String) -> String? {
     }
 
     let durationSec = Double(totalFrames) / sampleRate
-    NSLog("TranscodeALAC: Success — \(totalFrames) frames (\(String(format: "%.1f", durationSec))s) → \(outputPath)")
+    let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+    let outputSize = (try? FileManager.default.attributesOfItem(atPath: outputPath)[.size] as? Int) ?? 0
+    transcodeLog("Success — \(String(format: "%.1f", durationSec))s audio, \(inputSize/1024)KB→\(outputSize/1024)KB, took \(String(format: "%.2f", elapsed))s")
     return outputPath
 }
 
@@ -179,10 +209,10 @@ func transcodeIfNeeded(_ jsonString: String) -> String {
         return jsonString // already native, no transcoding needed
     }
 
-    NSLog("TranscodeIfNeeded: Non-native format detected (.\(ext)), transcoding…")
+    transcodeLog("Non-native format detected (.\(ext)), transcoding…")
 
     guard let newPath = transcodeToALAC(inputPath: filePath) else {
-        NSLog("TranscodeIfNeeded: Transcoding failed, returning original path")
+        transcodeLog("Transcoding failed, returning original path")
         return jsonString
     }
 
