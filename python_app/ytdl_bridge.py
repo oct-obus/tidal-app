@@ -245,65 +245,86 @@ def _ydl_opts_base(*, use_cookies=True):
 
 
 def _extract_with_fallback(url):
-    """Extract info with two-pass strategy for YouTube cookie/SABR issues.
+    """Extract info with smart client strategy.
 
-    Pass 1: With cookies (for Premium quality). yt-dlp defaults to
-    ('tv_downgraded', 'web_safari') for authenticated users. tv_downgraded
-    has SUPPORTS_COOKIES=True so it survives, and as a TVHTML5 client it
-    should avoid SABR and return formats with direct URLs.
+    For YouTube with cookies: skip the cookie pass entirely — all
+    cookie-compatible clients (tv_downgraded, web_safari) are SABR'd.
+    Go straight to no-cookies mode where android_vr provides direct URLs.
 
-    Pass 2: Without cookies. yt-dlp defaults to ('android_vr', 'web_safari').
-    android_vr bypasses SABR (old client version). Loses Premium quality
-    but reliably works.
+    For YouTube without cookies: single pass with yt-dlp defaults
+    (android_vr + web_safari).
+
+    For other platforms: normal extraction with cookies if available.
 
     Returns (info_dict, used_cookies: bool) or raises on total failure.
     """
     import yt_dlp
 
     has_cookies = _COOKIES_PATH and os.path.isfile(_COOKIES_PATH)
+    is_youtube = any(p in url.lower() for p in
+                     ("youtube.com", "youtu.be", "music.youtube.com"))
 
-    # --- Pass 1: with cookies (defaults to tv_downgraded + web_safari) ---
-    opts = _ydl_opts_base(use_cookies=True)
-    logger.info(f"  extract pass 1: cookies={'yes' if has_cookies else 'no'}"
-                " (using yt-dlp default clients)")
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-    except Exception as e:
-        logger.warning(f"  pass 1 failed: {e}")
-        info = None
+    if is_youtube and has_cookies:
+        # YouTube + cookies: skip cookie pass (tv_downgraded is SABR'd).
+        # Go directly to no-cookies → android_vr provides formats.
+        logger.info("  extract: YouTube + cookies → skipping cookie pass"
+                    " (SABR workaround)")
+        opts = _ydl_opts_base(use_cookies=False)
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            logger.warning(f"  extraction failed: {e}")
+            info = None
 
-    if info:
-        formats = info.get("formats") or []
-        audio_fmts = [f for f in formats
-                      if f.get("url") and f.get("acodec", "none") != "none"]
-        _log_formats(formats, "pass1")
-        if audio_fmts:
-            return info, True
+        if info:
+            formats = info.get("formats") or []
+            _log_formats(formats, "no-cookies")
+            audio_fmts = [f for f in formats
+                          if f.get("url")
+                          and f.get("acodec", "none") != "none"]
+            if audio_fmts:
+                return info, False
 
-    # --- Pass 2: without cookies (defaults to android_vr + web_safari) ---
-    if has_cookies:
-        logger.warning("  No audio formats with cookies — retrying without"
-                       " (SABR workaround: is_authenticated=False → defaults"
-                       " to android_vr + web_safari)")
-        opts2 = _ydl_opts_base(use_cookies=False)
+        # Last resort: try WITH cookies in case yt-dlp fixes SABR later
+        logger.warning("  No audio formats without cookies either"
+                       " — trying with cookies as fallback")
+        opts2 = _ydl_opts_base(use_cookies=True)
         try:
             with yt_dlp.YoutubeDL(opts2) as ydl:
                 info2 = ydl.extract_info(url, download=False)
         except Exception as e:
-            logger.warning(f"  pass 2 failed: {e}")
+            logger.warning(f"  cookie fallback failed: {e}")
             info2 = None
 
         if info2:
             formats2 = info2.get("formats") or []
-            _log_formats(formats2, "pass2")
+            _log_formats(formats2, "with-cookies")
             audio_fmts2 = [f for f in formats2
-                           if f.get("url") and f.get("acodec", "none") != "none"]
+                           if f.get("url")
+                           and f.get("acodec", "none") != "none"]
             if audio_fmts2:
-                return info2, False
+                return info2, True
 
-    # Return whatever we got (may have zero formats — caller handles error)
-    return info or info2, has_cookies
+        return info or info2, False
+
+    else:
+        # Non-YouTube or no cookies: single pass with default settings
+        opts = _ydl_opts_base(use_cookies=True)
+        logger.info(f"  extract: cookies={'yes' if has_cookies else 'no'}"
+                    f" platform={'youtube' if is_youtube else 'other'}")
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            logger.warning(f"  extraction failed: {e}")
+            info = None
+
+        if info:
+            formats = info.get("formats") or []
+            _log_formats(formats, "single-pass")
+
+        return info, has_cookies
 
 
 def _log_formats(formats, label=""):
@@ -316,6 +337,81 @@ def _log_formats(formats, label=""):
                     f" note={f.get('format_note', '')[:40]}")
     if len(formats) > 12:
         logger.info(f"    ... and {len(formats) - 12} more")
+
+
+# ---------------------------------------------------------------------------
+# Range-request download (YouTube throttle workaround)
+# ---------------------------------------------------------------------------
+
+_YT_RANGE_CHUNK = 10 * 1024 * 1024  # 10 MB — matches yt-dlp's CHUNK_SIZE
+
+
+def _download_http_ranged(stream_url, http_headers, content_length=0):
+    """Download via sequential HTTP Range requests to avoid YouTube throttle.
+
+    YouTube throttles single-GET downloads to ~30 KB/s after the initial
+    burst.  yt-dlp avoids this by downloading in 10 MB range-request chunks.
+    We replicate that behaviour here.
+
+    Returns (data: bytes, total_bytes: int).
+    """
+    from requests import Session as ReqSession
+
+    # First, get content length if we don't have it
+    if not content_length:
+        with ReqSession() as sess:
+            resp = sess.head(stream_url, timeout=30, headers=http_headers,
+                             allow_redirects=True)
+            content_length = int(resp.headers.get("Content-Length", 0))
+
+    if not content_length:
+        # Fallback: can't range-download without knowing the size
+        logger.warning("  No Content-Length — falling back to single GET")
+        return None, 0
+
+    logger.info(f"  Range download: {content_length} bytes"
+                f" in {(content_length + _YT_RANGE_CHUNK - 1) // _YT_RANGE_CHUNK} chunks")
+
+    chunks = []
+    total_bytes = 0
+    dl_start_time = time.monotonic()
+
+    with ReqSession() as sess:
+        offset = 0
+        while offset < content_length:
+            if _check_cancelled():
+                _write_progress("cancelled", 0, "Download cancelled")
+                _clear_cancel_flag()
+                raise InterruptedError("cancelled")
+
+            end = min(offset + _YT_RANGE_CHUNK - 1, content_length - 1)
+            range_headers = dict(http_headers)
+            range_headers["Range"] = f"bytes={offset}-{end}"
+
+            resp = sess.get(stream_url, timeout=60, headers=range_headers)
+            resp.raise_for_status()
+
+            data = resp.content
+            chunks.append(data)
+            total_bytes += len(data)
+            offset += len(data)
+
+            # Progress
+            frac = total_bytes / content_length
+            pct = _PROGRESS_DOWNLOAD_START + int(
+                _PROGRESS_DOWNLOAD_RANGE * frac)
+            elapsed = time.monotonic() - dl_start_time
+            speed_kbps = (total_bytes / 1024 / elapsed) if elapsed > 0 else 0
+            mb_done = total_bytes / (1024 * 1024)
+            mb_total = content_length / (1024 * 1024)
+            detail = (f"{mb_done:.1f} / {mb_total:.1f} MB"
+                      f" @ {speed_kbps:.0f} KB/s")
+            _write_progress(
+                "downloading",
+                min(pct, _PROGRESS_DOWNLOAD_START + _PROGRESS_DOWNLOAD_RANGE),
+                detail)
+
+    return b"".join(chunks), total_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -781,8 +877,28 @@ def download_url(url, quality="best"):
                 _write_progress("cancelled", 0, "Download cancelled")
                 _clear_cancel_flag()
                 return _result(False, error="cancelled")
+        elif platform == "youtube":
+            # YouTube: range-request download to avoid throttle.
+            # YouTube throttles single-GET downloads to ~30 KB/s.
+            # yt-dlp uses 10 MB range chunks internally; we do the same.
+            content_length = (selected or {}).get("filesize") or 0
+            try:
+                stream_data, total_bytes = _download_http_ranged(
+                    stream_url, http_headers, content_length)
+            except InterruptedError:
+                _write_progress("cancelled", 0, "Download cancelled")
+                _clear_cancel_flag()
+                return _result(False, error="cancelled")
+            if stream_data is None:
+                # Fallback if range download failed (no Content-Length)
+                logger.warning("  Range download returned None, "
+                               "falling back to single GET")
+                stream_data = None  # handled below
         else:
-            # Direct HTTP: chunked download with progress + speed tracking
+            stream_data = None
+
+        # Fallback: single streaming GET (SoundCloud, etc.)
+        if not is_hls and stream_data is None:
             total_bytes = 0
             speed_window_start = time.monotonic()
             speed_window_bytes = 0
@@ -816,7 +932,6 @@ def download_url(url, quality="best"):
                         speed_window_start = now
                         speed_window_bytes = 0
 
-                        # Warn if speed is suspiciously low after initial ramp
                         if (not throttle_warned
                                 and total_bytes > 256 * 1024
                                 and speed_bps < _THROTTLE_SPEED_THRESHOLD):
@@ -846,7 +961,8 @@ def download_url(url, quality="best"):
                     _write_progress(
                         "downloading",
                         min(pct,
-                            _PROGRESS_DOWNLOAD_START + _PROGRESS_DOWNLOAD_RANGE),
+                            _PROGRESS_DOWNLOAD_START
+                            + _PROGRESS_DOWNLOAD_RANGE),
                         detail,
                     )
 
