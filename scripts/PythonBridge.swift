@@ -532,8 +532,11 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
                 ]
 
                 for cookie in ytCookies {
-                    let includeSubdomains = cookie.domain.hasPrefix(".") ? "TRUE" : "FALSE"
+                    // Netscape format: domain always has leading dot for yt-dlp compatibility.
+                    // MozillaCookieJar asserts domain_specified == initial_dot,
+                    // so flag MUST be TRUE when domain starts with "."
                     let domain = cookie.domain.hasPrefix(".") ? cookie.domain : ".\(cookie.domain)"
+                    let includeSubdomains = "TRUE"
                     let secure = cookie.isSecure ? "TRUE" : "FALSE"
                     let expiry: String
                     if let expiresDate = cookie.expiresDate {
