@@ -462,7 +462,21 @@ def _select_audio_format(formats, quality="best"):
     format requires HLS segment downloading rather than plain HTTP.
     Prefers HLS AAC over HTTP MP3 when higher quality, since we can
     download fMP4 segments with the m3u8 library.
+
+    iOS AVPlayer supports: m4a, mp4, aac, mp3, wav, aiff, caf.
+    It does NOT support: webm, opus, ogg, vorbis.
+    We strongly prefer iOS-native formats and only fall back to
+    webm/opus if nothing else is available.
     """
+    # Extensions / codecs that iOS AVPlayer can play natively
+    _IOS_EXTS = {"m4a", "mp4", "mp3", "aac", "wav", "aiff", "caf"}
+    _IOS_CODECS = {"mp4a", "aac", "mp3"}
+
+    def _is_ios_native(f):
+        ext = (f.get("ext") or "").lower()
+        codec = (f.get("acodec") or "").lower().split(".")[0]
+        return ext in _IOS_EXTS or codec in _IOS_CODECS
+
     audio_fmts = [
         f for f in formats
         if f.get("acodec", "none") != "none"
@@ -475,10 +489,18 @@ def _select_audio_format(formats, quality="best"):
     if not pool:
         return None, False
 
+    # Split into iOS-native and non-native (webm/opus)
+    native_pool = [f for f in pool if _is_ios_native(f)]
+    fallback_pool = [f for f in pool if not _is_ios_native(f)]
+
+    # Use native formats when available; fall back to webm/opus only
+    # if no iOS-compatible formats exist at all.
+    effective_pool = native_pool if native_pool else fallback_pool
+
     # Partition into direct-HTTP vs HLS
-    http_pool = [f for f in pool
+    http_pool = [f for f in effective_pool
                  if f.get("protocol", "http") in ("http", "https")]
-    hls_pool = [f for f in pool
+    hls_pool = [f for f in effective_pool
                 if f.get("protocol") in ("m3u8", "m3u8_native")]
 
     # Sort both pools by bitrate (descending)
