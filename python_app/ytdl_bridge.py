@@ -21,7 +21,7 @@ logger = logging.getLogger("ytdl_bridge")
 _LOG_FILE_HANDLER = None
 _LOG_PATH = None
 
-_APP_VERSION = "1.5.1"
+_APP_VERSION = "1.5.2"
 
 # Progress constants (same scale as tiddl_bridge)
 _PROGRESS_EXTRACT = 0
@@ -213,16 +213,20 @@ def _ydl_opts_base():
         "postprocessors": [],
         # Permissive format: best audio, fallback to any single stream
         "format": "ba/b/w",
+        # Force non-SABR clients. YouTube's web clients now return SABR-only
+        # streams (no direct URLs), causing zero available formats.
+        # android_vr (v1.65) avoids SABR; ios provides HLS fallback.
+        # missing_pot: don't skip formats that lack a PO token — the
+        # webkit-jsi plugin may provide one, and Premium users don't need it.
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android_vr", "ios", "mweb"],
+                "formats": ["missing_pot"],
+            }
+        },
     }
     if has_cookies:
-        # With cookies (logged-in user), use default web client.
-        # The ios player client rejects web cookies and returns no formats.
         opts["cookiefile"] = _COOKIES_PATH
-    else:
-        # Without cookies, use ios+mweb clients to bypass n-param throttle.
-        opts["extractor_args"] = {
-            "youtube": {"player_client": ["ios", "mweb"]}
-        }
     # Use Documents/cache for yt-dlp cache
     if DOCUMENTS_DIR:
         cache_dir = os.path.join(DOCUMENTS_DIR, "cache", "ytdl")
@@ -505,10 +509,10 @@ def get_url_info(url):
         logger.info(f"  yt-dlp {yt_dlp.version.__version__} app={_APP_VERSION}")
         opts = _ydl_opts_base()
         has_cookies = "cookiefile" in opts
-        has_ios_client = "ios" in str(opts.get("extractor_args", ""))
+        clients = opts.get("extractor_args", {}).get("youtube", {}).get("player_client", [])
         logger.info(f"  cookiefile={'yes' if has_cookies else 'no'}"
                     f" format={opts.get('format')}"
-                    f" player={'ios+mweb' if has_ios_client else 'default'}")
+                    f" clients={clients}")
 
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -516,6 +520,16 @@ def get_url_info(url):
         if not info:
             logger.warning("get_url_info: extract_info returned None")
             return _result(False, error="Could not extract info from URL")
+
+        # Log available formats for debugging
+        raw_formats = info.get("formats", [])
+        logger.info(f"  formats_count={len(raw_formats)}")
+        for f in raw_formats[:10]:
+            logger.info(f"    fmt={f.get('format_id')} ext={f.get('ext')}"
+                        f" acodec={f.get('acodec')} vcodec={f.get('vcodec')}"
+                        f" abr={f.get('abr')} url={'yes' if f.get('url') else 'NO'}")
+        if len(raw_formats) > 10:
+            logger.info(f"    ... and {len(raw_formats) - 10} more")
 
         info_type = info.get("_type", "track")
         title = info.get("title", "?")
