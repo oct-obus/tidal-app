@@ -1,6 +1,8 @@
 import Flutter
 import UIKit
 import WebKit
+import AVFoundation
+import AudioToolbox
 
 // Python C API
 @_silgen_name("Py_Initialize")
@@ -26,6 +28,189 @@ func PyGILState_Release(_ state: Int32)
 
 @_silgen_name("PyEval_SaveThread")
 func PyEval_SaveThread() -> OpaquePointer?
+
+// MARK: - Audio Transcoding (opus/webm → ALAC m4a)
+
+/// Extensions that AVPlayer cannot play natively.
+private let _nonNativeAudioExts: Set<String> = ["webm", "opus", "ogg"]
+
+/// Transcode a non-native audio file (e.g. opus in webm) to ALAC in an m4a
+/// container using AudioToolbox's ExtAudioFile API (iOS 17+).
+/// Returns the path of the transcoded file on success, or nil on failure.
+func transcodeToALAC(inputPath: String) -> String? {
+    let inputURL = URL(fileURLWithPath: inputPath)
+    let outputPath = (inputPath as NSString).deletingPathExtension + ".m4a"
+    let outputURL = URL(fileURLWithPath: outputPath)
+
+    // Remove existing output if present
+    try? FileManager.default.removeItem(at: outputURL)
+
+    // Open input
+    var inputFileRef: ExtAudioFileRef?
+    var status = ExtAudioFileOpenURL(inputURL as CFURL, &inputFileRef)
+    guard status == noErr, let inputFile = inputFileRef else {
+        NSLog("TranscodeALAC: Failed to open input (\(status)): \(inputPath)")
+        return nil
+    }
+    defer { ExtAudioFileDispose(inputFile) }
+
+    // Read input format
+    var inputASBD = AudioStreamBasicDescription()
+    var propSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+    status = ExtAudioFileGetProperty(
+        inputFile, kExtAudioFileProperty_FileDataFormat, &propSize, &inputASBD)
+    guard status == noErr else {
+        NSLog("TranscodeALAC: Failed to get input format (\(status))")
+        return nil
+    }
+
+    let sampleRate: Float64 = inputASBD.mSampleRate > 0 ? inputASBD.mSampleRate : 48000
+    let channels: UInt32 = inputASBD.mChannelsPerFrame > 0 ? inputASBD.mChannelsPerFrame : 2
+
+    // Client (intermediate) format: 16-bit integer PCM
+    var clientASBD = AudioStreamBasicDescription(
+        mSampleRate: sampleRate,
+        mFormatID: kAudioFormatLinearPCM,
+        mFormatFlags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
+        mBytesPerPacket: 2 * channels,
+        mFramesPerPacket: 1,
+        mBytesPerFrame: 2 * channels,
+        mChannelsPerFrame: channels,
+        mBitsPerChannel: 16,
+        mReserved: 0
+    )
+
+    status = ExtAudioFileSetProperty(
+        inputFile, kExtAudioFileProperty_ClientDataFormat,
+        UInt32(MemoryLayout<AudioStreamBasicDescription>.size), &clientASBD)
+    guard status == noErr else {
+        NSLog("TranscodeALAC: Failed to set client format on input (\(status))")
+        return nil
+    }
+
+    // Output format: Apple Lossless in m4a
+    var outputASBD = AudioStreamBasicDescription(
+        mSampleRate: sampleRate,
+        mFormatID: kAudioFormatAppleLossless,
+        mFormatFlags: 0,
+        mBytesPerPacket: 0,
+        mFramesPerPacket: 4096,
+        mBytesPerFrame: 0,
+        mChannelsPerFrame: channels,
+        mBitsPerChannel: 16,
+        mReserved: 0
+    )
+
+    var outputFileRef: ExtAudioFileRef?
+    status = ExtAudioFileCreateWithURL(
+        outputURL as CFURL,
+        kAudioFileM4AType,
+        &outputASBD,
+        nil,
+        AudioFileFlags.eraseFile.rawValue,
+        &outputFileRef)
+    guard status == noErr, let outputFile = outputFileRef else {
+        NSLog("TranscodeALAC: Failed to create output (\(status)): \(outputPath)")
+        return nil
+    }
+    defer { ExtAudioFileDispose(outputFile) }
+
+    status = ExtAudioFileSetProperty(
+        outputFile, kExtAudioFileProperty_ClientDataFormat,
+        UInt32(MemoryLayout<AudioStreamBasicDescription>.size), &clientASBD)
+    guard status == noErr else {
+        NSLog("TranscodeALAC: Failed to set client format on output (\(status))")
+        return nil
+    }
+
+    // Read/write loop — 4096 frames per iteration
+    let bufferFrames: UInt32 = 4096
+    let bufferByteSize = Int(bufferFrames * clientASBD.mBytesPerFrame)
+    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferByteSize)
+    defer { buffer.deallocate() }
+
+    var totalFrames: Int64 = 0
+    while true {
+        var frameCount = bufferFrames
+        var bufferList = AudioBufferList(
+            mNumberBuffers: 1,
+            mBuffers: AudioBuffer(
+                mNumberChannels: channels,
+                mDataByteSize: UInt32(bufferByteSize),
+                mData: buffer
+            )
+        )
+
+        status = ExtAudioFileRead(inputFile, &frameCount, &bufferList)
+        guard status == noErr else {
+            NSLog("TranscodeALAC: Read error at frame \(totalFrames) (\(status))")
+            try? FileManager.default.removeItem(at: outputURL)
+            return nil
+        }
+        if frameCount == 0 { break }
+
+        status = ExtAudioFileWrite(outputFile, frameCount, &bufferList)
+        guard status == noErr else {
+            NSLog("TranscodeALAC: Write error at frame \(totalFrames) (\(status))")
+            try? FileManager.default.removeItem(at: outputURL)
+            return nil
+        }
+        totalFrames += Int64(frameCount)
+    }
+
+    let durationSec = Double(totalFrames) / sampleRate
+    NSLog("TranscodeALAC: Success — \(totalFrames) frames (\(String(format: "%.1f", durationSec))s) → \(outputPath)")
+    return outputPath
+}
+
+/// Check a download result JSON and transcode the audio file if it's a
+/// non-native format. Modifies the JSON in-place (filePath, fileExtension).
+func transcodeIfNeeded(_ jsonString: String) -> String {
+    guard let data = jsonString.data(using: .utf8),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let success = json["success"] as? Bool, success,
+          let resultData = json["data"] as? [String: Any],
+          let filePath = resultData["filePath"] as? String else {
+        return jsonString
+    }
+
+    let ext = (filePath as NSString).pathExtension.lowercased()
+    guard _nonNativeAudioExts.contains(ext) else {
+        return jsonString // already native, no transcoding needed
+    }
+
+    NSLog("TranscodeIfNeeded: Non-native format detected (.\(ext)), transcoding…")
+
+    guard let newPath = transcodeToALAC(inputPath: filePath) else {
+        NSLog("TranscodeIfNeeded: Transcoding failed, returning original path")
+        return jsonString
+    }
+
+    // Clean up original file
+    try? FileManager.default.removeItem(atPath: filePath)
+
+    // Also clean up .meta.json for old path and rename if it exists
+    let oldMetaPath = filePath + ".meta.json"
+    let newMetaPath = newPath + ".meta.json"
+    if FileManager.default.fileExists(atPath: oldMetaPath) {
+        try? FileManager.default.moveItem(atPath: oldMetaPath, toPath: newMetaPath)
+    }
+
+    // Update JSON with new path and extension
+    var updatedData = resultData
+    updatedData["filePath"] = newPath
+    updatedData["fileExtension"] = ".m4a"
+    updatedData["transcoded"] = true
+    var updatedJson = json
+    updatedJson["data"] = updatedData
+
+    if let updatedJsonData = try? JSONSerialization.data(withJSONObject: updatedJson),
+       let updatedString = String(data: updatedJsonData, encoding: .utf8) {
+        return updatedString
+    }
+
+    return jsonString
+}
 
 class PythonBridge: NSObject {
     static let shared = PythonBridge()
@@ -454,7 +639,11 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
             let safeUrl = bridge.pythonEscape(url)
             let safeQuality = bridge.pythonEscape(quality)
             bridge.runWithResult("ytdl_bridge.download_url('\(safeUrl)', '\(safeQuality)')") { response in
-                result(response)
+                if let resp = response {
+                    result(transcodeIfNeeded(resp))
+                } else {
+                    result(response)
+                }
             }
 
         case "setCookiesPath":
