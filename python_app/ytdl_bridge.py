@@ -456,7 +456,6 @@ def _check_throttle_hint(stream_url, platform):
 # ---------------------------------------------------------------------------
 
 _IOS_NATIVE_EXTS = frozenset({"m4a", "mp4", "aac", "mp3"})
-_NON_NATIVE_EXTS = frozenset({"webm", "opus", "ogg", "oga"})
 
 
 def _is_native(fmt):
@@ -545,7 +544,7 @@ def _select_audio_format(formats, quality="best"):
             f"No iOS-native audio format available; selecting non-native "
             f"(ext={best_http_nonnative.get('ext')}, "
             f"abr={best_http_nonnative.get('abr')}). "
-            "Transcoding will be attempted by the Swift layer.")
+            "Download will fail — iOS cannot play this container.")
         return best_http_nonnative, False
     if hls_pool:
         return hls_pool[0], True
@@ -868,6 +867,17 @@ def download_url(url, quality="best"):
             acodec = selected.get("acodec")
             http_headers = (selected.get("http_headers")
                             or info.get("http_headers") or {})
+            # Reject non-native containers — iOS cannot play them directly
+            # and transcoding support has been removed.  This path is only
+            # reached when YouTube/SoundCloud have no m4a/mp3 at all (very
+            # unlikely in practice).
+            raw_ext = file_ext.lstrip(".")
+            if raw_ext not in _IOS_NATIVE_EXTS and not is_hls:
+                return _result(
+                    False,
+                    error=f"No iOS-native audio format is available for this"
+                          f" track (only {acodec} in .{raw_ext}). "
+                          "Try a different source or re-downloading.")
         elif info.get("url"):
             is_hls = False
             stream_url = info["url"]
