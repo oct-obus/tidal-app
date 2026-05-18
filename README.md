@@ -78,3 +78,7 @@ The app produces an unsigned IPA. Install using any sideloading method:
 - Other signing tools (Sideloadly, etc.)
 
 No jailbreak required.
+
+## Known Limitations & Future Work
+
+- **YouTube audio quality** — YouTube serves Opus 133kbps in WebM container, and AAC 129kbps in m4a. The app currently selects m4a for iOS compatibility (iOS AudioToolbox cannot open WebM containers directly). Future: implement a pure-Python WebM→CAF repackager (EBML demux + CAF wrap) so the Opus bitstream can be delivered in a container iOS 17+ can play natively, without ffmpeg and without quality loss.
