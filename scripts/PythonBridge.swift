@@ -212,7 +212,20 @@ func transcodeIfNeeded(_ jsonString: String) -> String {
     transcodeLog("Non-native format detected (.\(ext)), transcoding…")
 
     guard let newPath = transcodeToALAC(inputPath: filePath) else {
-        transcodeLog("Transcoding failed, returning original path")
+        transcodeLog("Transcoding failed — cleaning up unplayable .\(ext) file")
+        // Remove the unplayable file so it doesn't clutter the downloads folder
+        try? FileManager.default.removeItem(atPath: filePath)
+        let oldMetaPath = filePath + ".meta.json"
+        try? FileManager.default.removeItem(atPath: oldMetaPath)
+        // Return an error result so Dart can show a meaningful message
+        let errPayload: [String: Any] = [
+            "success": false,
+            "error": "Transcoding failed: .\(ext) container is not supported by iOS AudioToolbox. Try downloading a different track or re-downloading (m4a format will be selected next time)."
+        ]
+        if let errData = try? JSONSerialization.data(withJSONObject: errPayload),
+           let errString = String(data: errData, encoding: .utf8) {
+            return errString
+        }
         return jsonString
     }
 

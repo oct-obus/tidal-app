@@ -455,17 +455,26 @@ def _check_throttle_hint(stream_url, platform):
 # Format selection helpers
 # ---------------------------------------------------------------------------
 
+_IOS_NATIVE_EXTS = frozenset({"m4a", "mp4", "aac", "mp3"})
+_NON_NATIVE_EXTS = frozenset({"webm", "opus", "ogg", "oga"})
+
+
+def _is_native(fmt):
+    """Return True if the format can be played by iOS AVPlayer without transcoding."""
+    return fmt.get("ext", "").lower() in _IOS_NATIVE_EXTS
+
+
 def _select_audio_format(formats, quality="best"):
     """Pick the best audio-only format from a list of yt-dlp format dicts.
 
     Returns a tuple ``(format_dict, is_hls)`` where ``is_hls`` indicates the
     format requires HLS segment downloading rather than plain HTTP.
-    Prefers HLS AAC over HTTP MP3 when higher quality, since we can
-    download fMP4 segments with the m3u8 library.
 
-    Picks the highest quality audio regardless of container format.
-    Non-native containers (webm/opus) are transparently transcoded
-    to ALAC in m4a by the Swift layer before playback.
+    iOS-native containers (m4a, mp4, aac, mp3) are always preferred over
+    non-native containers (webm, opus, ogg) to ensure direct playback via
+    AVPlayer.  Non-native formats are only selected if no native format is
+    available at all; in that case the Swift transcoding layer attempts to
+    convert the file, though not all containers are supported.
     """
     audio_fmts = [
         f for f in formats
@@ -485,43 +494,61 @@ def _select_audio_format(formats, quality="best"):
     hls_pool = [f for f in pool
                 if f.get("protocol") in ("m3u8", "m3u8_native")]
 
-    # Sort both pools by bitrate (descending)
-    http_pool.sort(
-        key=lambda f: f.get("abr") or f.get("tbr") or 0, reverse=True)
-    hls_pool.sort(
-        key=lambda f: f.get("abr") or f.get("tbr") or 0, reverse=True)
+    # Further partition by native vs non-native container
+    http_native = [f for f in http_pool if _is_native(f)]
+    http_nonnative = [f for f in http_pool if not _is_native(f)]
+    hls_native = [f for f in hls_pool if _is_native(f)]
 
-    best_http = http_pool[0] if http_pool else None
-    best_hls = hls_pool[0] if hls_pool else None
+    # Sort each sub-pool by bitrate (descending)
+    for lst in (http_native, http_nonnative, hls_native, http_pool, hls_pool):
+        lst.sort(key=lambda f: f.get("abr") or f.get("tbr") or 0, reverse=True)
 
     if quality == "low":
-        if http_pool:
-            return http_pool[-1], False
+        low_http = http_native or http_nonnative or http_pool
+        if low_http:
+            return low_http[-1], False
         if hls_pool:
             return hls_pool[-1], True
         return None, False
 
     if quality == "medium":
-        if http_pool and len(http_pool) > 1:
-            return http_pool[len(http_pool) // 2], False
-        if http_pool:
-            return http_pool[0], False
+        mid_http = http_native or http_nonnative or http_pool
+        if mid_http and len(mid_http) > 1:
+            return mid_http[len(mid_http) // 2], False
+        if mid_http:
+            return mid_http[0], False
         if hls_pool:
-            return hls_pool[len(hls_pool) // 2] if len(hls_pool) > 1 else hls_pool[0], True
+            return (hls_pool[len(hls_pool) // 2]
+                    if len(hls_pool) > 1 else hls_pool[0]), True
         return None, False
 
-    # "best" / "high" -- prefer higher quality even if HLS
-    if best_http and best_hls:
-        http_br = best_http.get("abr") or best_http.get("tbr") or 0
-        hls_br = best_hls.get("abr") or best_hls.get("tbr") or 0
-        if hls_br > http_br:
-            return best_hls, True
-        return best_http, False
+    # "best" / "high" -- prefer native, then HLS native, then non-native
+    best_http_native = http_native[0] if http_native else None
+    best_hls_native = hls_native[0] if hls_native else None
+    best_http_nonnative = http_nonnative[0] if http_nonnative else None
 
-    if best_http:
-        return best_http, False
-    if best_hls:
-        return best_hls, True
+    # First: compare best native HTTP vs best native HLS
+    if best_http_native and best_hls_native:
+        http_br = best_http_native.get("abr") or best_http_native.get("tbr") or 0
+        hls_br = best_hls_native.get("abr") or best_hls_native.get("tbr") or 0
+        if hls_br > http_br:
+            return best_hls_native, True
+        return best_http_native, False
+    if best_http_native:
+        return best_http_native, False
+    if best_hls_native:
+        return best_hls_native, True
+
+    # No native format — fall back to non-native (transcoding may be required)
+    if best_http_nonnative:
+        logger.warning(
+            f"No iOS-native audio format available; selecting non-native "
+            f"(ext={best_http_nonnative.get('ext')}, "
+            f"abr={best_http_nonnative.get('abr')}). "
+            "Transcoding will be attempted by the Swift layer.")
+        return best_http_nonnative, False
+    if hls_pool:
+        return hls_pool[0], True
     return None, False
 
 
