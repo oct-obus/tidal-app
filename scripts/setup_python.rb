@@ -39,7 +39,9 @@ target.source_build_phase.add_file_reference(ffmpeg_ref)
 def add_swift_package(project, target, url, product_name, requirement)
   root = project.root_object
   root.package_references ||= []
-  package_ref = root.package_references.find { |ref| ref.repositoryURL == url }
+  package_ref = root.package_references.find do |ref|
+    ref.respond_to?(:repositoryURL) && ref.repositoryURL == url
+  end
   unless package_ref
     package_ref = project.new(Xcodeproj::Project::Object::XCRemoteSwiftPackageReference)
     package_ref.repositoryURL = url
