@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'managers/auth_manager.dart';
 import 'managers/playback_manager.dart';
@@ -410,17 +409,6 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
               ],
-              if (source == 'youtube' && !isPlaylist) ...[
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.science),
-                    label: const Text('Run Opus iOS Diagnostic'),
-                    onPressed: () => Navigator.pop(ctx, 'opus_diag'),
-                  ),
-                ),
-              ],
             ],
           ),
         );
@@ -439,21 +427,6 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    if (action == 'opus_diag') {
-      final result = await _library.diagnoseYouTubeOpus(url);
-      if (!mounted) return;
-      if (result == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_library.status.isNotEmpty
-              ? _library.status
-              : 'Opus diagnostic failed')),
-        );
-        return;
-      }
-      await _showOpusDiagnosticResult(result);
-      return;
-    }
-
     final result = await _library.downloadUrl(url);
     if (result != null) {
       _playback.trackTitle = result['title'] as String?;
@@ -461,48 +434,6 @@ class _HomePageState extends State<HomePage> {
       _playback.trackAlbum = result['album'] as String?;
       _searchController.clear();
     }
-  }
-
-  Future<void> _showOpusDiagnosticResult(Map<String, dynamic> result) async {
-    final content = result['content'] as String? ?? '(empty diagnostic log)';
-    final logPath = result['logPath'] as String?;
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => Scaffold(
-          appBar: AppBar(
-            title: const Text('Opus Diagnostic'),
-            actions: [
-              if (logPath != null)
-                IconButton(
-                  icon: const Icon(Icons.share),
-                  tooltip: 'Share diagnostic log',
-                  onPressed: () => _library.shareFile(logPath),
-                ),
-              IconButton(
-                icon: const Icon(Icons.copy),
-                tooltip: 'Copy log',
-                onPressed: () {
-                  Clipboard.setData(ClipboardData(text: content));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Diagnostic copied')),
-                  );
-                },
-              ),
-            ],
-          ),
-          body: Padding(
-            padding: const EdgeInsets.all(12),
-            child: SelectableText(
-              content,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                fontFamily: 'monospace',
-                fontSize: 11,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   Future<void> _handleSpotifyLink(String url) async {

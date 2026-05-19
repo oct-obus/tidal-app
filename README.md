@@ -10,7 +10,7 @@ Flutter iOS app for downloading music from Tidal, YouTube, and SoundCloud with v
 
 ### Downloading
 - **Tidal** - download tracks by URL or search. Quality: LOW (AAC 96k), HIGH (AAC 320k), LOSSLESS (FLAC 16-bit), HI_RES_LOSSLESS (FLAC 24-bit)
-- **YouTube** - download audio from any YouTube/YouTube Music link. Default AAC ~128kbps, or 256kbps with Premium cookies
+- **YouTube** - download audio from any YouTube/YouTube Music link. Best quality preserves YouTube Opus by remuxing WebM/Opus to MP4/Opus, with AAC/m4a fallback
 - **SoundCloud** - download via HLS (AAC 160kbps fMP4) or direct HTTP
 - **Spotify link resolution** - paste a Spotify track link to resolve the title/artist, then search and download from Tidal
 - **Real-time progress** - MB downloaded/total, cancel button, step descriptions
@@ -36,7 +36,7 @@ Flutter iOS app for downloading music from Tidal, YouTube, and SoundCloud with v
 - **Swipe to delete** with confirmation
 
 ### Advanced
-- **YouTube Premium cookies** - import `cookies.txt` for 256kbps AAC quality
+- **YouTube cookies** - import `cookies.txt` for authenticated extraction when supported by yt-dlp's current YouTube clients
 - **WebKit JSI anti-throttle** - runs YouTube's JS challenge natively via `yt-dlp-apple-webkit-jsi` plugin, bypassing n-parameter throttling without ffmpeg
 - **In-app login browser** - WKWebView for Tidal device-code authentication
 
@@ -81,4 +81,5 @@ No jailbreak required.
 
 ## Known Limitations & Future Work
 
-- **YouTube audio quality** — YouTube serves Opus 133kbps in WebM container, and AAC 129kbps in m4a. Normal downloads prefer m4a for iOS compatibility (iOS AudioToolbox cannot open WebM containers directly). A debug Opus diagnostic can download WebM/Opus, test direct playback and no-reencode remux candidates, and include AAC/m4a only as a labeled fallback baseline.
+- **YouTube audio quality** — YouTube serves Opus in WebM and AAC in m4a. Normal best-quality downloads prefer WebM/Opus, then use FFmpeg to losslessly remux it to MP4/Opus for AVPlayer. If remuxing fails, the app falls back to AAC/m4a conversion for playback compatibility.
+- **TODO: YouTube Premium extraction** — retest authenticated/Premium `cookies.txt` extraction separately. Current YouTube extraction may skip cookies for some clients to avoid SABR-only URLs and keep direct downloadable streams working.

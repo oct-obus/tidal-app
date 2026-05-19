@@ -21,7 +21,7 @@ logger = logging.getLogger("ytdl_bridge")
 _LOG_FILE_HANDLER = None
 _LOG_PATH = None
 
-_APP_VERSION = "1.5.3"
+_APP_VERSION = "1.5.4"
 
 # Progress constants (same scale as tiddl_bridge)
 _PROGRESS_EXTRACT = 0
@@ -138,120 +138,6 @@ def clear_log():
         except OSError:
             pass
     return _result(True)
-
-
-def download_youtube_opus_diagnostic(url):
-    """Download YouTube's best WebM/Opus audio for iOS container diagnostics.
-
-    This is intentionally separate from normal downloads. It does not add the
-    file to the music library metadata flow; Swift runs direct/remux playback
-    tests and writes a diagnostic log the user can share.
-    """
-    try:
-        if not DOCUMENTS_DIR:
-            return _result(False, error="Documents directory not set")
-
-        logger.info("=== YouTube Opus diagnostic start ===")
-        logger.info(f"  url={url}")
-        _write_progress("diagnostic", 0, "Extracting YouTube formats...")
-
-        info, used_cookies = _extract_with_fallback(url)
-        if not info:
-            return _result(False, error="Could not extract YouTube info")
-
-        if info.get("_type") == "playlist":
-            first = next((e for e in info.get("entries", []) if e), None)
-            if first is None:
-                return _result(False, error="Playlist is empty or unresolvable")
-            info = first
-
-        formats = info.get("formats") or []
-        opus_formats = [
-            f for f in formats
-            if f.get("url")
-            and f.get("vcodec") in ("none", None)
-            and (f.get("ext") or "").lower() == "webm"
-            and "opus" in (f.get("acodec") or "").lower()
-        ]
-        opus_formats.sort(key=lambda f: f.get("abr") or f.get("tbr") or 0,
-                          reverse=True)
-        if not opus_formats:
-            return _result(False, error="No YouTube WebM/Opus audio format found")
-
-        selected = opus_formats[0]
-        title = info.get("title", "Unknown")
-        artist = (info.get("uploader") or info.get("creator")
-                  or info.get("channel") or "Unknown")
-        track_id = info.get("id", "")
-        abr = selected.get("abr") or selected.get("tbr")
-        asr = selected.get("asr")
-        acodec = selected.get("acodec")
-        http_headers = selected.get("http_headers") or info.get("http_headers") or {}
-
-        logger.info(
-            f"Diagnostic format: fmt={selected.get('format_id')} "
-            f"ext={selected.get('ext')} codec={acodec} abr={abr} asr={asr} "
-            f"cookies={used_cookies}")
-        _write_progress("diagnostic", 10, "Downloading WebM/Opus test file...")
-
-        content_length = selected.get("filesize") or selected.get("filesize_approx") or 0
-        try:
-            stream_data, total_bytes = _download_http_ranged(
-                selected["url"], http_headers, content_length)
-        except InterruptedError:
-            _write_progress("cancelled", 0, "Diagnostic cancelled")
-            _clear_cancel_flag()
-            return _result(False, error="cancelled")
-
-        if stream_data is None:
-            from requests import Session as ReqSession
-
-            with ReqSession() as sess:
-                resp = sess.get(selected["url"], timeout=60, stream=True,
-                                headers=http_headers)
-                resp.raise_for_status()
-                chunks = []
-                total_bytes = 0
-                for chunk in resp.iter_content(chunk_size=64 * 1024):
-                    if _check_cancelled():
-                        resp.close()
-                        _write_progress("cancelled", 0, "Diagnostic cancelled")
-                        _clear_cancel_flag()
-                        return _result(False, error="cancelled")
-                    chunks.append(chunk)
-                    total_bytes += len(chunk)
-                stream_data = b"".join(chunks)
-
-        diag_dir = os.path.join(DOCUMENTS_DIR, "opus_diagnostics")
-        os.makedirs(diag_dir, exist_ok=True)
-        safe_name = _safe_filename(f"{artist} - {title}") or "youtube-opus"
-        file_path = os.path.join(
-            diag_dir, f"{safe_name} [yt-opus-{track_id}].webm")
-        tmp_path = file_path + ".tmp"
-        with open(tmp_path, "wb") as f:
-            f.write(stream_data)
-        os.replace(tmp_path, file_path)
-
-        logger.info(f"Diagnostic WebM downloaded: {file_path} bytes={total_bytes}")
-        _write_progress("diagnostic", 90, "Running iOS Opus diagnostics...")
-        return _result(True, {
-            "filePath": file_path,
-            "title": title,
-            "artist": artist,
-            "sourceUrl": info.get("webpage_url", url),
-            "sourceId": track_id,
-            "formatId": selected.get("format_id"),
-            "fileExtension": ".webm",
-            "codec": acodec or "opus",
-            "abr": abr,
-            "sampleRate": asr,
-            "fileSize": os.path.getsize(file_path),
-            "usedCookies": used_cookies,
-        })
-    except Exception as e:
-        _write_progress("error", 0, str(e))
-        logger.error(f"Opus diagnostic error: {e}\n{traceback.format_exc()}")
-        return _result(False, error=str(e))
 
 
 # ---------------------------------------------------------------------------
@@ -577,17 +463,21 @@ def _is_native(fmt):
     return fmt.get("ext", "").lower() in _IOS_NATIVE_EXTS
 
 
+def _is_youtube_opus(fmt):
+    """Return True for YouTube's direct WebM/Opus audio streams."""
+    return ((fmt.get("ext") or "").lower() == "webm"
+            and "opus" in (fmt.get("acodec") or "").lower())
+
+
 def _select_audio_format(formats, quality="best"):
     """Pick the best audio-only format from a list of yt-dlp format dicts.
 
     Returns a tuple ``(format_dict, is_hls)`` where ``is_hls`` indicates the
     format requires HLS segment downloading rather than plain HTTP.
 
-    iOS-native containers (m4a, mp4, aac, mp3) are always preferred over
-    non-native containers (webm, opus, ogg) to ensure direct playback via
-    AVPlayer. Non-native formats are only selected if no native format is
-    available at all; normal downloads reject them because iOS cannot play
-    those containers directly.
+    For best/high quality, YouTube WebM/Opus is preferred so Swift can
+    losslessly remux it to MP4/Opus before playback. Lower qualities keep
+    preferring iOS-native AAC containers.
     """
     audio_fmts = [
         f for f in formats
@@ -610,10 +500,12 @@ def _select_audio_format(formats, quality="best"):
     # Further partition by native vs non-native container
     http_native = [f for f in http_pool if _is_native(f)]
     http_nonnative = [f for f in http_pool if not _is_native(f)]
+    http_opus = [f for f in http_pool if _is_youtube_opus(f)]
     hls_native = [f for f in hls_pool if _is_native(f)]
 
     # Sort each sub-pool by bitrate (descending)
-    for lst in (http_native, http_nonnative, hls_native, http_pool, hls_pool):
+    for lst in (http_native, http_nonnative, http_opus, hls_native,
+                http_pool, hls_pool):
         lst.sort(key=lambda f: f.get("abr") or f.get("tbr") or 0, reverse=True)
 
     if quality == "low":
@@ -647,10 +539,18 @@ def _select_audio_format(formats, quality="best"):
                     if len(hls_pool) > 1 else hls_pool[0]), True
         return None, False
 
-    # "best" / "high" -- prefer native, then HLS native, then non-native
+    # "best" / "high" -- prefer remuxable Opus, then native, then HLS native
     best_http_native = http_native[0] if http_native else None
     best_hls_native = hls_native[0] if hls_native else None
     best_http_nonnative = http_nonnative[0] if http_nonnative else None
+    best_http_opus = http_opus[0] if http_opus else None
+
+    if best_http_opus:
+        logger.info(
+            f"Selecting YouTube WebM/Opus for MP4 remux "
+            f"(fmt={best_http_opus.get('format_id')}, "
+            f"abr={best_http_opus.get('abr') or best_http_opus.get('tbr')})")
+        return best_http_opus, False
 
     # First: compare best native HTTP vs best native HLS
     if best_http_native and best_hls_native:
@@ -670,7 +570,7 @@ def _select_audio_format(formats, quality="best"):
             f"No iOS-native audio format available; selecting non-native "
             f"(ext={best_http_nonnative.get('ext')}, "
             f"abr={best_http_nonnative.get('abr')}). "
-            "Normal download will fail; use the Opus diagnostic for tests.")
+            "Normal download will require FFmpeg AAC fallback.")
         return best_http_nonnative, False
     if hls_pool:
         return hls_pool[0], True
@@ -993,15 +893,6 @@ def download_url(url, quality="best"):
             acodec = selected.get("acodec")
             http_headers = (selected.get("http_headers")
                             or info.get("http_headers") or {})
-            # Reject non-native containers for normal downloads; the FFmpeg
-            # path is diagnostic-only so production playback remains AVPlayer-safe.
-            raw_ext = file_ext.lstrip(".")
-            if raw_ext not in _IOS_NATIVE_EXTS and not is_hls:
-                return _result(
-                    False,
-                    error=f"No iOS-native audio format is available for this"
-                          f" track (only {acodec} in .{raw_ext}). "
-                          "Use the Opus diagnostic to test no-reencode options.")
         elif info.get("url"):
             is_hls = False
             stream_url = info["url"]
