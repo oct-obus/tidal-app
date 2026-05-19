@@ -51,6 +51,7 @@ jobs:
         run: |
           cp scripts/PythonBridge.swift ios/Runner/PythonBridge.swift
           cp scripts/AudioBridge.swift ios/Runner/AudioBridge.swift
+          cp scripts/FFmpegBridge.swift ios/Runner/FFmpegBridge.swift
           cat > ios/Runner/AppDelegate.swift << 'SWIFT'
           import Flutter
           import UIKit
@@ -245,6 +246,7 @@ jobs:
         run: |
           cp scripts/PythonBridge.swift ios/Runner/PythonBridge.swift
           cp scripts/AudioBridge.swift ios/Runner/AudioBridge.swift
+          cp scripts/FFmpegBridge.swift ios/Runner/FFmpegBridge.swift
           cat > ios/Runner/AppDelegate.swift << 'SWIFT'
           import Flutter
           import UIKit

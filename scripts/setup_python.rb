@@ -33,6 +33,57 @@ target.source_build_phase.add_file_reference(bridge_ref)
 audio_ref = runner_group.new_file('AudioBridge.swift')
 target.source_build_phase.add_file_reference(audio_ref)
 
+ffmpeg_ref = runner_group.new_file('FFmpegBridge.swift')
+target.source_build_phase.add_file_reference(ffmpeg_ref)
+
+def add_swift_package(project, target, url, product_name, requirement)
+  root = project.root_object
+  root.package_references ||= []
+  package_ref = root.package_references.find { |ref| ref.repositoryURL == url }
+  unless package_ref
+    package_ref = project.new(Xcodeproj::Project::Object::XCRemoteSwiftPackageReference)
+    package_ref.repositoryURL = url
+    package_ref.requirement = requirement
+    root.package_references << package_ref
+  end
+
+  target.package_product_dependencies ||= []
+  product_dep = target.package_product_dependencies.find do |dep|
+    dep.product_name == product_name && dep.package == package_ref
+  end
+  unless product_dep
+    product_dep = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
+    product_dep.product_name = product_name
+    product_dep.package = package_ref
+    target.package_product_dependencies << product_dep
+  end
+
+  already_linked = target.frameworks_build_phase.files.any? do |file|
+    file.respond_to?(:product_ref) && file.product_ref == product_dep
+  end
+  unless already_linked
+    build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
+    build_file.product_ref = product_dep
+    target.frameworks_build_phase.files << build_file
+  end
+end
+
+add_swift_package(
+  project,
+  target,
+  'https://github.com/kewlbear/FFmpeg-iOS.git',
+  'FFmpeg-iOS',
+  { 'kind' => 'exactVersion', 'version' => '0.0.6-b20230416-200000' }
+)
+
+add_swift_package(
+  project,
+  target,
+  'https://github.com/kewlbear/FFmpeg-iOS-Support.git',
+  'FFmpeg-iOS-Support',
+  { 'kind' => 'exactVersion', 'version' => '0.0.2' }
+)
+
 # Stdlib is installed post-build by scripts/post_build.sh
 
 target.build_configurations.each do |config|

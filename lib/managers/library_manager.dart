@@ -286,6 +286,54 @@ class LibraryManager extends ChangeNotifier {
     }
   }
 
+  /// Runs a debug-only YouTube WebM/Opus no-reencode playback/remux matrix.
+  Future<Map<String, dynamic>?> diagnoseYouTubeOpus(String url) async {
+    isDownloading = true;
+    downloadStep = 'Starting Opus diagnostic...';
+    downloadProgress = 0;
+    _wasCancelled = false;
+    notifyListeners();
+    startProgressPolling();
+
+    try {
+      final response = await pythonChannel
+          .invokeMethod<String>('diagnoseYouTubeOpus', {'url': url});
+      if (response == null) {
+        status = 'Opus diagnostic failed: no response';
+        notifyListeners();
+        return null;
+      }
+      final data = jsonDecode(response);
+      if (data['success'] == true) {
+        downloadProgress = 1.0;
+        notifyListeners();
+        return data['data'] as Map<String, dynamic>;
+      }
+      final error = data['error'] as String? ?? 'Unknown error';
+      if (error == 'cancelled') {
+        _wasCancelled = true;
+        status = '';
+      } else {
+        status = 'Opus diagnostic error: $error';
+      }
+      notifyListeners();
+      return null;
+    } on PlatformException catch (e) {
+      status = 'Opus diagnostic error: ${e.message}';
+      notifyListeners();
+      return null;
+    } catch (e) {
+      status = 'Opus diagnostic error: $e';
+      notifyListeners();
+      return null;
+    } finally {
+      stopProgressPolling();
+      isDownloading = false;
+      downloadStep = '';
+      notifyListeners();
+    }
+  }
+
   bool _wasCancelled = false;
 
   Future<void> cancelDownload() async {

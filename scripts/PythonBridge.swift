@@ -163,6 +163,7 @@ class PythonBridge: NSObject {
 
 public class PythonBridgePlugin: NSObject, FlutterPlugin {
     private let bridge = PythonBridge.shared
+    private static let ffmpegQueue = DispatchQueue(label: "com.obus.ffmpeg", qos: .userInitiated)
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(
@@ -456,6 +457,29 @@ public class PythonBridgePlugin: NSObject, FlutterPlugin {
             let safeQuality = bridge.pythonEscape(quality)
             bridge.runWithResult("ytdl_bridge.download_url('\(safeUrl)', '\(safeQuality)')") { response in
                 result(response)
+            }
+
+        case "diagnoseYouTubeOpus":
+            guard let args = call.arguments as? [String: Any],
+                  let url = args["url"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing 'url'", details: nil))
+                return
+            }
+            let safeUrl = bridge.pythonEscape(url)
+            bridge.runWithResult("ytdl_bridge.download_youtube_opus_diagnostic('\(safeUrl)')") { response in
+                guard let response = response else {
+                    result(response)
+                    return
+                }
+                Self.ffmpegQueue.async {
+                    let diagnostic = FFmpegBridge.runOpusDiagnostic(
+                        response,
+                        documentsPath: self.bridge.documentsPath
+                    )
+                    DispatchQueue.main.async {
+                        result(diagnostic)
+                    }
+                }
             }
 
         case "setCookiesPath":
